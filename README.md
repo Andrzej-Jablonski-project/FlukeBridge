@@ -1,4 +1,10 @@
 # 🧭 Fluke Bridge Wi‑Fi Adapter
+
+![Release](https://img.shields.io/github/v/release/Andrzej-Jablonski-project/FlukeBridge?display_name=release)
+![Downloads](https://img.shields.io/github/downloads/Andrzej-Jablonski-project/FlukeBridge/total)
+![CI](https://github.com/Andrzej-Jablonski-project/FlukeBridge/actions/workflows/release.yml/badge.svg?branch=main)
+![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)
+
 Wireless bridge for Fluke 287/289 multimeters with live dashboard, HTTP API, and OBS integration
 
 ## 📘 Overview
