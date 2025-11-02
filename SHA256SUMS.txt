@@ -1,0 +1,1 @@
+e139145f439702a640c7d8aefccba347fd7a2170d8a38b58668d7a3d4c034bb6  github/FlukeBridge-ver3.2-XIAO-ESP32C3.bin

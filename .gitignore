@@ -1,0 +1,16 @@
+__pycache__/
+.DS_Store
+.vscode/
+*.pyc
+*.log
+*.csv
+*.bin
+!FlukeBridge-ver3.2-XIAO-ESP32C3.bin
+*.elf
+*.map
+build/
+arduino_build*/
+Arduino*/
+*.zip
+fluke_status.txt
+fluke_value.txt
