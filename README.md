@@ -306,6 +306,42 @@ Note: Firmware sources are included under `firmware/`. If you prefer flashing a 
 - `cd pc && ./run_obs_with_fluke.sh`
 - The script probes HTTP (`/status.json`); if unavailable, it falls back to USB (`/dev/ttyACM0`).
 
+### 🪟 Windows Setup
+
+1) Install Python 3 (from python.org). In PowerShell:
+```
+py -3 -m pip install --upgrade pip
+py -3 -m pip install pyserial
+```
+
+2) Access the device
+- Via HTTP (recommended): `http://fluke-bridge.local/status.json` (mDNS). If `.local` does not resolve on Windows, use the IP from your router or the index page.
+- Via USB: find the COM port in Device Manager (e.g., `COM3`).
+
+3) Run the reader on Windows
+```
+REM HTTP (Wi‑Fi)
+py -3 pc\fluke_read.py --http http://fluke-bridge.local/status.json
+
+REM USB (fallback)
+py -3 pc\fluke_read.py --serial COM3
+```
+
+4) Optional helper (Windows BAT)
+```
+REM Probes HTTP, falls back to USB COM3, and tries to launch OBS if installed
+pc\run_obs_with_fluke.bat
+
+REM Override defaults:
+set URL=http://<device-ip>/status.json
+set SER=COM5
+pc\run_obs_with_fluke.bat
+```
+
+5) OBS on Windows
+- Add two Text (GDI+) sources → Read from file: `fluke_value.txt`, `fluke_status.txt` from the repo folder.
+- Run the reader (HTTP preferred). Files update about once per second.
+
 ## 🔁 Wi‑Fi Reset (BOOT)
 
 - Hold BOOT (> 3 s). Device clears Wi‑Fi credentials (NVS + Preferences), restarts into AP mode with captive portal.

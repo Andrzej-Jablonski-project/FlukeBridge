@@ -5,6 +5,7 @@ __pycache__/
 *.log
 *.csv
 *.bin
+!FlukeBridge-ver*-XIAO-ESP32C3.bin
 !FlukeBridge-ver3.2-XIAO-ESP32C3.bin
 *.elf
 *.map
