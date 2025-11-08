@@ -43,15 +43,19 @@ The project enables:
   <img src="docs/images/fluke-cable.png" alt="IR link with XIAO ESP32-C3 – LM393 schematic" width="720">
 </p>
 
-## 🔋 Battery Indicator Logic
+## 🔋 Battery Indicator Logic (ver3.3)
 
-| Battery State | Voltage | LED Behavior (GPIO3) |
-|---------------|---------|----------------------|
+Filtered voltage with hysteresis for stable UI and LED behavior. Battery percent uses a Li‑ion OCV (open‑circuit voltage) piecewise‑linear mapping with additional smoothing to avoid 1% flicker.
+
+| Battery State | Thresholds (filtered) | LED Behavior (GPIO3) |
+|---------------|-----------------------|----------------------|
 | No battery / PCM cutoff | < 1.0 V | OFF |
-| Normal | > 3.45 V | OFF |
-| Low | 3.30 – 3.45 V | ON steady |
-| Critical | < 3.30 V | Blinking |
-| USB connected | — | OFF |
+| Full | > 4.15 V | OFF |
+| USB connected | VBAT > 4.60 V (heuristic) | OFF |
+| Low (WARN) | ON ≤ 3.40 V, clears > 3.50 V | ON steady |
+| Critical (CRIT) | ON ≤ 3.00 V, clears > 3.10 V | Blinking (~1 Hz) |
+
+Power saving: if CRIT holds continuously for 15 s, Wi‑Fi turns off and the device enters deep sleep. Wakeup via RESET.
 
 ## 🌐 Network Operation
 
@@ -70,15 +74,16 @@ When connected:
 - Accessible via mDNS → `http://fluke-bridge.local`
 - Endpoints:
   - `/` → index page with links
-  - `/status.html` → dashboard (dark mode)
-  - `/status.json` → live JSON API
-  - `/update` → OTA firmware upload panel (ver3.2)
+- `/status.html` → dashboard (dark mode)
+- `/status.json` → live JSON API
+- `/config` → password-protected Config (SOC/VBAT)
+- `/update` → OTA firmware upload panel
 
 <p>
   <img src="docs/images/dashboard.png" alt="Dashboard – client mode" width="960">
 </p>
 
-## ⚙️ OTA Firmware Update (ver3.2)
+## ⚙️ OTA Firmware Update
 
 1. In Arduino IDE → Sketch → Export compiled binary
 2. Open browser: `http://fluke-bridge.local/update`
@@ -100,21 +105,44 @@ If Wi‑Fi is not configured:
 - Use the Python tool `pc/fluke_read.py` with `--serial`.
 - When Wi‑Fi is configured later, continue using HTTP (`/status.json`).
 
+### USB SoC Calibration (optional)
+You can calibrate the percent mapping to your battery chemistry/cell by teaching the firmware your actual "full" and "empty" voltages (after resting a few minutes, not under heavy load):
+
+- `SOC SET_FULL`  → saves current filtered VBAT as calibrated FULL
+- `SOC SET_EMPTY` → saves current filtered VBAT as calibrated EMPTY
+- `SOC?`          → prints calibration status and values
+- `SOC CLEAR`     → clears calibration (reverts to defaults)
+
+Once calibrated, the firmware normalizes measured VBAT between your `EMPTY↔FULL` to the reference OCV curve before converting to percent. Displayed voltage remains the real measured value.
+
+### USB VBAT Divider / Calibration (universal hardware)
+If you use a different resistor divider or want to correct tolerance, you can configure VBAT measurement at runtime (persisted in NVS):
+
+- `VBAT?`            → prints measured VBAT, raw (pre‑scale), divider and scale
+- `VBAT DIV <R1> <R2>` → set divider resistors in ohms (e.g., `VBAT DIV 620000 470000`), saves to NVS
+- `VBAT SCALE <k>`   → set additional scale factor (e.g., `VBAT SCALE 0.965`), saves to NVS
+- `VBAT CAL <volts>` → one‑point calibration: enter true VBAT from a reference DMM; firmware computes scale and saves
+- `VBAT CLEAR`       → reset to defaults (620k/470k, scale=1.0)
+
+Firmware uses ESP32‑C3 ADC calibration via `analogReadMilliVolts()` with appropriate attenuation and averages multiple samples for stability.
+
 ## 📡 JSON API — `/status.json`
 
-Example:
+Example (ver3.3 adds filtered voltage, battery state and sleep timer):
 
 ```json
 {
   "wifi": { "ssid": "rzuf3", "rssi": -29, "ip": "172.28.7.203" },
   "battery": {
-    "voltage": 4.38,
-    "percent": 100,
+    "voltage": 3.72,
+    "v_raw": 3.68,
+    "percent": 56,
+    "state": "discharge",
     "usb_present": false,
     "warn": false,
     "crit": false,
     "charging": false,
-    "full": true,
+    "full": false,
     "no_batt": false
   },
   "fluke": {
@@ -126,7 +154,8 @@ Example:
     "ol": false,
     "raw": "22.6,CEL,NORMAL,NONE"
   },
-  "uptime": 234
+  "uptime": 234,
+  "sleep_in": -1
 }
 ```
 
@@ -136,12 +165,15 @@ Example:
 |---------------|----------------------------------|
 | `wifi.*`      | Wi‑Fi connection info            |
 | `battery.*`   | Battery telemetry                |
+| `battery.v_raw`| Instantaneous (unfiltered) voltage |
+| `battery.state`| One of: `discharge`, `charging`, `full`, `no_batt` |
 | `fluke.pretty`| Human‑friendly formatted value   |
 | `fluke.value` | Raw numeric                      |
 | `fluke.unit`  | Measurement unit                 |
 | `fluke.status`| Meter status (e.g., NORMAL, CONT, DIODE) |
 | `fluke.ol`    | True if overload (OL)            |
 | `uptime`      | Seconds since boot               |
+| `sleep_in`    | Seconds to deep sleep in CRIT (−1 otherwise) |
 
 ## 🧠 Firmware Features
 
@@ -153,7 +185,7 @@ Example:
 | mDNS support       | Access as `fluke-bridge.local`                |
 | Battery ADC monitor| Percentage + LED logic                        |
 | IR UART            | 115200 baud, RX=20, TX=21 (non‑inverted)      |
-| OTA Update         | Native OTA via `Update.h` (ver3.2)            |
+| OTA Update         | Native OTA via `Update.h`                      |
 | BOOT long‑press    | Wi‑Fi reset (clear NVS + Preferences)         |
 | Dark theme UI      | Consistent design                             |
 | Failsafe USB       | Automatic serial fallback                     |
@@ -220,6 +252,7 @@ Values refresh about every second.
 | 3.0     | Dashboard + battery logic          |
 | 3.1     | OL handling fix + mDNS             |
 | 3.2     | OTA + dual Wi‑Fi/USB mode          |
+| 3.3     | VBAT filtering + hysteresis; CRIT→deep sleep; JSON: v_raw, sleep_in |
 
 ## 🚀 Release (tag + draft on GitHub)
 
@@ -227,11 +260,11 @@ Use the helper script to generate the checksum and print the git commands:
 
 ```
 cd github
-bash tools/release.sh 3.2
+bash tools/release.sh 3.3
 ```
 
-This will create `SHA256SUMS.txt` and show the exact `git add/commit/tag/push` steps. Pushing the tag `v3.2` triggers GitHub Actions to create a draft Release with:
-- `FlukeBridge-ver3.2-XIAO-ESP32C3.bin`
+This will create `SHA256SUMS.txt` and show the exact `git add/commit/tag/push` steps. Pushing the tag `v3.3` triggers GitHub Actions to create a draft Release with for example:
+- `FlukeBridge-ver3.3-XIAO-ESP32C3.bin`
 - `SHA256SUMS.txt`
 
 You can then publish the Release from the GitHub UI.
@@ -257,7 +290,7 @@ MIT License (permissive). See LICENSE.
 
 - `pc/fluke_read.py` – host script: reads from HTTP `/status.json` or USB; writes text for OBS.
 - `pc/run_obs_with_fluke.sh` – starts the Python script (HTTP with fallback to USB) and OBS.
-- `FlukeBridge-ver3.2-XIAO-ESP32C3.bin` – prebuilt firmware image for OTA/USB flashing (ver3.2).
+- `FlukeBridge-ver3.2-XIAO-ESP32C3.bin` – prebuilt firmware image (ver3.2). For ver3.3, build from source or create a new release.
 - `docs/images/*.png` – screenshots used in this README, plus IR schematic.
 - `LICENSE`, `CHANGELOG.md`, `.gitignore`, `README.md` – project metadata.
 
@@ -265,7 +298,7 @@ Note: Firmware sources are included under `firmware/`. If you prefer flashing a 
 
 ## 🛠 Build and Upload (USB)
 
-1) Open `firmware/ver3.2/ver3.2.ino` (or `ver3.1`) in Arduino IDE.
+1) Open `firmware/ver3.3/ver3.3.ino` (or earlier versions) in Arduino IDE.
 2) Select board: Seeed Studio XIAO ESP32‑C3 (ESP32‑C3 core v3.0+). Upload via USB‑C.
 
 ## 🎥 Run with OBS on the host
@@ -276,3 +309,10 @@ Note: Firmware sources are included under `firmware/`. If you prefer flashing a 
 ## 🔁 Wi‑Fi Reset (BOOT)
 
 - Hold BOOT (> 3 s). Device clears Wi‑Fi credentials (NVS + Preferences), restarts into AP mode with captive portal.
+## 🔧 Web Config (SOC/VBAT)
+
+Open `/config` (same Basic Auth as OTA). You can:
+- Set/clear SoC calibration using current VBAT (FULL/EMPTY)
+- Query VBAT, set divider (R1/R2), set scale, or calibrate to DMM voltage
+
+Under the hood, this calls `/api/soc` and `/api/vbat` endpoints that return JSON (usable from scripts, too).

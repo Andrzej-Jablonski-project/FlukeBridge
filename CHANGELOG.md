@@ -3,6 +3,14 @@ Changelog
 
 All notable changes to this project will be documented in this file.
 
+3.3 – Filtered VBAT + deep sleep
+- Add exponential filter and hysteresis for battery voltage/LED.
+- Enter deep sleep after 15 s in CRIT to protect the cell.
+- `/status.json`: add `battery.v_raw` and `sleep_in` fields.
+- Add battery state string in JSON (`battery.state`).
+- Smoothed percent: voltage deadband + quantization + rate limiting.
+- ADC improvements: `analogReadMilliVolts()` + runtime VBAT config (divider + scale) via USB (`VBAT?`, `VBAT DIV`, `VBAT SCALE`, `VBAT CAL`, `VBAT CLEAR`).
+
 3.2 – OTA + dual Wi‑Fi/USB mode
 - Add OTA updates via `/update` (Basic Auth: admin/fluke1234).
 - Add PING/VER/MODE/WIFI? USB commands; keep QM/QS/ID/QDDA/RI/RMP.
@@ -26,4 +34,3 @@ All notable changes to this project will be documented in this file.
 
 0.1 – Basic serial bridge
 - Read Fluke via IR/UART and print frames.
-
