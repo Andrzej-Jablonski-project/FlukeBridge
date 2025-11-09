@@ -14,6 +14,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Compute version (strip 'v' prefix)
+        run: echo "VER=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
+
       - name: Create GitHub Release (auto-publish)
         uses: softprops/action-gh-release@v1
         with:
@@ -22,5 +25,5 @@ jobs:
           name: ${{ github.ref_name }} – Fluke Bridge
           body_path: CHANGELOG.md
           files: |
-            FlukeBridge-ver${{ replace(github.ref_name, 'v', '') }}-XIAO-ESP32C3.bin
+            FlukeBridge-ver${{ env.VER }}-XIAO-ESP32C3.bin
             SHA256SUMS.txt
