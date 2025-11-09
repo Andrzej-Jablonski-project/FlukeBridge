@@ -3,6 +3,13 @@ Changelog
 
 All notable changes to this project will be documented in this file.
 
+3.3.1 – Config UI + performance
+- Config page: responsive 3/2/1‑column grid for Advanced tuning (no overflow on focus).
+- Config page: added "Restore defaults" button for tuning (persists in NVS).
+- Config page: Result box wraps/scrolls long lines (no overflow outside card).
+- ADC sampling: VBAT read averages 4 samples without per‑sample delays (snappier UI).
+- Firmware version bump to `ver3.3.1` (shown in UI/OTA).
+
 3.3 – Filtered VBAT + deep sleep
 - Add exponential filter and hysteresis for battery voltage/LED.
 - Enter deep sleep after 15 s in CRIT to protect the cell.

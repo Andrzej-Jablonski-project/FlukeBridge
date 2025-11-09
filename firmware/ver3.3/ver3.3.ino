@@ -63,7 +63,7 @@ WebServer server(80);
 DNSServer dnsServer; // for captive portal in AP mode
 const byte DNS_PORT = 53;
 IPAddress apIP(192, 168, 4, 1);
-static const char *FW_VER = "ver3.3";
+static const char *FW_VER = "ver3.3.1";
 static const char *OTA_USER = "admin";
 static const char *OTA_PASS = "fluke1234";
 
@@ -102,6 +102,35 @@ static const int PCT_RATE_STEP = 1;              // limit change to 1% per step
 static const uint32_t PCT_RATE_MS = 1000;        // at most once per 1 s
 static const float PCT_VDELTA_MIN = 0.020f;      // ignore VBAT changes <= 20 mV for percent target
 static const uint32_t PCT_VDELTA_HOLD_MS = 2000; // require voltage delta to persist 2 s
+// dV/dt-based charging/full detection and UI behavior
+static const uint32_t DVDT_WIN_MS = 4000; // window for dV/dt estimate
+// Defaults for trend-based thresholds (overridable via /config)
+static const float DEF_CHG_ON_DVDT_MV_S = 0.8f;          // charging if slope >= +0.8 mV/s
+static const float DEF_CHG_OFF_DVDT_MV_S = 0.2f;         // stop charging if negative slope magnitude >= 0.2 mV/s
+static const uint32_t DEF_CHG_ON_HOLD_MS = 6000;         // require slope ON for 6 s
+static const uint32_t DEF_CHG_OFF_HOLD_MS = 8000;        // require slope OFF for 8 s
+static const float DEF_FULL_DVDT_MAX = 0.2f;             // mV/s, near-flat slope to call full
+static const uint32_t DEF_FULL_HOLD_MS = 20000;          // 20 s above VBAT_FULL with flat slope
+static const uint32_t DEF_CHG_FREEZE_MS = 15000;         // freeze percent for 15 s on charge start
+static const uint32_t DEF_CHG_PCT_RATE_MS = 30000;       // while charging: +1% at most every 30 s
+static const uint32_t DEF_DISCH_PCT_RATE_MS = 5000;      // while discharging: 1% per 5 s
+static const float DEF_CHG_ON_MIN_DV = 0.015f;           // require >=15 mV rise during ON hold
+static const float DEF_CHG_OFF_ZERO_DVDT = 0.05f;        // ~flat slope threshold (|dV/dt| <= 0.05 mV/s)
+static const uint32_t DEF_CHG_OFF_ZERO_HOLD_MS = 120000; // 120 s of ~flat to consider OFF
+
+// Runtime tuneable copies (loaded from NVS)
+float gCfgChgOnDvdt = DEF_CHG_ON_DVDT_MV_S;
+float gCfgChgOffDvdt = DEF_CHG_OFF_DVDT_MV_S;
+uint32_t gCfgChgOnHoldMs = DEF_CHG_ON_HOLD_MS;
+uint32_t gCfgChgOffHoldMs = DEF_CHG_OFF_HOLD_MS;
+float gCfgFullDvdtMax = DEF_FULL_DVDT_MAX;
+uint32_t gCfgFullHoldMs = DEF_FULL_HOLD_MS;
+uint32_t gCfgChgFreezeMs = DEF_CHG_FREEZE_MS;
+uint32_t gCfgChgPctRateMs = DEF_CHG_PCT_RATE_MS;
+uint32_t gCfgDischPctRateMs = DEF_DISCH_PCT_RATE_MS;
+float gCfgChgOnMinDv = DEF_CHG_ON_MIN_DV;
+float gCfgChgOffZeroDvdt = DEF_CHG_OFF_ZERO_DVDT;
+uint32_t gCfgChgOffZeroHoldMs = DEF_CHG_OFF_ZERO_HOLD_MS;
 
 bool battNoBatt = false, battCrit = false, battWarn = false, battCharging = false, battFull = false, usbPresent = false;
 // Runtime-configurable VBAT measurement config
@@ -116,6 +145,16 @@ uint32_t gPercentStepT0 = 0;   // rate-limit timer
 float gPctVref = NAN;          // last VBAT used for percent target
 int gPctTarget = -1;           // target percent (after deadband + quantization)
 uint32_t gPctVdeltaT0 = 0;     // timer for sustained voltage delta
+// dV/dt and charging/full detection state
+float gDvdtMVs = 0.0f;
+uint32_t gDvdtRefT = 0;
+float gDvdtRefV = 0.0f;
+bool gTrendCharging = false;
+bool gTrendFull = false;
+uint32_t gChgOnT0 = 0, gChgOffT0 = 0, gFullT0 = 0;
+uint32_t gChgFreezeUntil = 0;
+float gChgOnV0 = 0.0f;   // voltage at charge-ON candidate start
+uint32_t gChgZeroT0 = 0; // timer for near-zero slope OFF
 uint32_t ledTmr = 0;
 bool ledOn = false;
 
@@ -181,12 +220,11 @@ float readVBATRawNoScale()
 {
     // dummy read to settle S/H cap
     (void)analogReadMilliVolts(PIN_ADC_VBAT);
-    const int N = 8;
+    const int N = 4;
     uint32_t sum = 0;
     for (int i = 0; i < N; ++i)
     {
         sum += (uint32_t)analogReadMilliVolts(PIN_ADC_VBAT);
-        delay(2);
     }
     float mv = (float)sum / (float)N; // millivolts at pin
     float v_pin = mv / 1000.0f;
@@ -309,6 +347,88 @@ void updateBatteryFilter()
         gVbatFilt = VBAT_FILT_ALPHA * gVbatFilt + (1.0f - VBAT_FILT_ALPHA) * gVbatRaw;
     }
 
+    // dV/dt measurement and trend-based charging/full detection
+    if (gDvdtRefT == 0)
+    {
+        gDvdtRefT = now;
+        gDvdtRefV = gVbatFilt;
+    }
+    if (now - gDvdtRefT >= DVDT_WIN_MS)
+    {
+        float dt = (now - gDvdtRefT) / 1000.0f;
+        gDvdtMVs = ((gVbatFilt - gDvdtRefV) / dt) * 1000.0f; // mV/s
+        gDvdtRefT = now;
+        gDvdtRefV = gVbatFilt;
+    }
+    bool wasCharging = gTrendCharging;
+    // FULL detection: high voltage and flat slope sustained
+    if (gVbatFilt >= VBAT_FULL && fabsf(gDvdtMVs) <= gCfgFullDvdtMax)
+    {
+        if (gFullT0 == 0)
+            gFullT0 = now;
+        if (now - gFullT0 >= gCfgFullHoldMs)
+            gTrendFull = true;
+    }
+    else
+    {
+        gFullT0 = 0;
+        gTrendFull = false;
+    }
+    // CHARGING detection: positive slope sustained, and not full
+    if (!gTrendFull)
+    {
+        if (gDvdtMVs >= gCfgChgOnDvdt)
+        {
+            if (gChgOnT0 == 0)
+            {
+                gChgOnT0 = now;
+                gChgOnV0 = gVbatFilt;
+            }
+            if (now - gChgOnT0 >= gCfgChgOnHoldMs)
+            {
+                if ((gVbatFilt - gChgOnV0) >= gCfgChgOnMinDv)
+                    gTrendCharging = true;
+            }
+        }
+        else
+        {
+            gChgOnT0 = 0;
+        }
+        // consider charging OFF on sustained negative slope
+        if (gDvdtMVs <= -gCfgChgOffDvdt)
+        {
+            if (gChgOffT0 == 0)
+                gChgOffT0 = now;
+            if (now - gChgOffT0 >= gCfgChgOffHoldMs)
+                gTrendCharging = false;
+        }
+        else
+        {
+            gChgOffT0 = 0;
+        }
+        // also consider OFF if slope remains ~zero for a long time (e.g., after unplug, rebound fades)
+        if (fabsf(gDvdtMVs) <= gCfgChgOffZeroDvdt)
+        {
+            if (gChgZeroT0 == 0)
+                gChgZeroT0 = now;
+            if (now - gChgZeroT0 >= gCfgChgOffZeroHoldMs)
+                gTrendCharging = false;
+        }
+        else
+        {
+            gChgZeroT0 = 0;
+        }
+    }
+    else
+    {
+        gTrendCharging = false;
+        gChgOnT0 = gChgOffT0 = 0;
+    }
+    if (!wasCharging && gTrendCharging)
+    {
+        gChgFreezeUntil = now + gCfgChgFreezeMs;
+    }
+
     // Update stabilized percentage with hysteresis and hold time
     float vForPct = socNormalizeVoltage(gVbatFilt);
     int pCand = vbatPercentOCV(vForPct);
@@ -344,7 +464,13 @@ void updateBatteryFilter()
         gPctVdeltaT0 = 0; // delta not big/sustained enough
     }
     int pNow = gPctTarget;
-    if (gPercentDisp < 0)
+    if (gTrendFull)
+    {
+        gPercentDisp = 100;
+        gPercentChangeT0 = 0;
+        gPercentStepT0 = now;
+    }
+    else if (gPercentDisp < 0)
     {
         gPercentDisp = pNow;
         gPercentChangeT0 = 0;
@@ -354,7 +480,12 @@ void updateBatteryFilter()
     {
         int diff = pNow - gPercentDisp;
         bool allowed = false;
-        if (abs(diff) >= PCT_MIN_DELTA)
+        // Freeze after charging start
+        if (gTrendCharging && (int32_t)(gChgFreezeUntil - now) > 0)
+        {
+            allowed = false;
+        }
+        else if (abs(diff) >= PCT_MIN_DELTA)
         {
             allowed = true;
             gPercentChangeT0 = 0;
@@ -371,10 +502,13 @@ void updateBatteryFilter()
         }
         else
         {
-            gPercentChangeT0 = 0; // no pending change
+            gPercentChangeT0 = 0;
         }
 
-        if (allowed && (now - gPercentStepT0 >= PCT_RATE_MS))
+        uint32_t rateMs = gTrendCharging ? gCfgChgPctRateMs : gCfgDischPctRateMs;
+        if (gTrendCharging && diff < 0)
+            allowed = false; // don't go down while charging
+        if (allowed && (now - gPercentStepT0 >= rateMs))
         {
             int step = (diff > 0) ? PCT_RATE_STEP : -PCT_RATE_STEP;
             if (abs(diff) <= PCT_RATE_STEP)
@@ -406,7 +540,8 @@ void batteryLedTask()
 
     usbPresent = (vb > USB_PRESENT_V); // USB heuristic
     battNoBatt = (vb < VBAT_NOBAT);
-    battFull = (!battNoBatt && vb > VBAT_FULL);
+    // Use trend-based full/charging states computed in updateBatteryFilter
+    battFull = (!battNoBatt && gTrendFull);
 
     // Hysteresis on WARN/CRIT (disabled when USB present or no-batt)
     if (usbPresent || battNoBatt)
@@ -455,9 +590,8 @@ void batteryLedTask()
         }
     }
 
-    // "charging" hint: if between ~3.7 and 4.2 and not full
-    // Charging shown only when USB is present (heuristic) and not full
-    battCharging = (usbPresent && !battFull && vb >= 3.70f && vb <= 4.20f);
+    // Charging: trend-based
+    battCharging = (!battFull && gTrendCharging);
 
     // Apply LED rules
     uint32_t now = millis();
@@ -1195,32 +1329,68 @@ void handleConfigPage()
         return; // reuse OTA Basic Auth
     static const char PROGMEM page[] = R"HTML(
 <!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>FlukeBridge – Config</title>
-<style>body{font-family:sans-serif;padding:16px;max-width:760px;margin:0 auto;background:#0b1220;color:#e8eef7}
-section{background:#121a2a;border:1px solid #1b2540;border-radius:12px;padding:14px;margin:12px 0}
-label{display:block;margin:6px 0 2px}input{width:100%;padding:8px;border-radius:6px;border:1px solid #1b2540;background:#0e1526;color:#e8eef7}
-button{padding:8px 12px;border:1px solid #1b2540;background:#0e1526;color:#e8eef7;border-radius:8px;cursor:pointer;margin-top:8px}
-pre{background:#0e1526;border:1px solid #1b2540;border-radius:8px;padding:10px;white-space:pre-wrap}
+<title>FlukeBridge - Config</title>
+<style>*{box-sizing:border-box}body{font-family:sans-serif;padding:16px;margin:0;background:#0b1220;color:#e8eef7}
+.wrap{max-width:920px;margin:0 auto}
+section{background:#121a2a;border:1px solid #1b2540;border-radius:12px;padding:16px;margin:14px 0}
+label{display:block;margin:8px 0 4px}
+input{width:100%;max-width:100%;padding:10px;border-radius:8px;border:1px solid #1b2540;background:#0e1526;color:#e8eef7}
+button{padding:10px 14px;border:1px solid #1b2540;background:#0e1526;color:#e8eef7;border-radius:10px;cursor:pointer;margin-top:8px}
+small{display:block;opacity:.75;margin-top:4px}
+pre{background:#0e1526;border:1px solid #1b2540;border-radius:10px;padding:12px;white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;overflow:auto;max-width:100%}
+.form-narrow{max-width:100%;margin:0}
+.btn-row{display:flex;flex-wrap:wrap;gap:10px;justify-content:flex-start;margin:8px 0 12px}
+.grid-adv{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:10px}
+.grid-adv>div{min-width:0;overflow:hidden}
+@media (max-width:980px){.grid-adv{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:600px){.grid-adv{grid-template-columns:1fr}}
+@media (max-width:520px){button{width:100%}}
 </style></head><body>
+<div class="wrap">
 <h2>Config (SOC/VBAT)</h2>
 <section><h3>Battery SoC</h3>
-<button onclick="doSoc('status')">SOC Status</button>
-<button onclick="doSoc('set_full')">Set FULL (use current VBAT)</button>
-<button onclick="doSoc('set_empty')">Set EMPTY (use current VBAT)</button>
-<button onclick="doSoc('clear')">Clear SOC Calibration</button>
+<div class="btn-row">
+  <button onclick="doSoc('status')">SOC Status</button>
+  <button onclick="doSoc('set_full')">Set FULL (use current VBAT)</button>
+  <button onclick="doSoc('set_empty')">Set EMPTY (use current VBAT)</button>
+  <button onclick="doSoc('clear')">Clear SOC Calibration</button>
+</div>
+</section>
+<section><h3>Charging/Full detection - Advanced</h3>
+<div class="btn-row"><button onclick="loadTune()">Load current</button></div>
+<div class="grid-adv">
+  <div><label>on_dvdt (mV/s)</label><input id="on_dvdt" placeholder="0.8"><small>Minimum positive slope to enter CHARGING</small></div>
+  <div><label>on_hold (ms)</label><input id="on_hold" placeholder="6000"><small>Time the slope must hold (enter)</small></div>
+  <div><label>on_mindv (V)</label><input id="on_mindv" placeholder="0.015"><small>Minimum net VBAT rise during on_hold</small></div>
+  <div><label>off_dvdt (mV/s)</label><input id="off_dvdt" placeholder="0.2"><small>Negative slope magnitude to exit CHARGING</small></div>
+  <div><label>off_hold (ms)</label><input id="off_hold" placeholder="8000"><small>Time the negative slope must hold (exit)</small></div>
+  <div><label>zero_dvdt (mV/s)</label><input id="zero_dvdt" placeholder="0.05"><small>|dV/dt| considered ~flat</small></div>
+  <div><label>zero_hold (ms)</label><input id="zero_hold" placeholder="120000"><small>Flat slope duration to exit CHARGING</small></div>
+  <div><label>full_hold (ms)</label><input id="full_hold" placeholder="20000"><small>Time near VBAT_FULL with flat slope to mark FULL</small></div>
+  <div><label>freeze_ms</label><input id="freeze_ms" placeholder="15000"><small>Freeze percent after CHARGING start</small></div>
+  <div><label>chg_rate (ms)</label><input id="chg_rate" placeholder="30000"><small>Charging: max +1% every N ms</small></div>
+  <div><label>d_rate (ms)</label><input id="d_rate" placeholder="5000"><small>Discharge: ±1% every N ms</small></div>
+</div>
+<div class="btn-row">
+  <button onclick="saveTune()">Save tuning</button>
+  <button onclick="resetTune()">Restore defaults</button>
+</div>
 </section>
 <section><h3>VBAT Measurement</h3>
-<button onclick="doVbat('query')">VBAT?</button>
-<label>R1 (ohms)</label><input id="r1" placeholder="620000">
-<label>R2 (ohms)</label><input id="r2" placeholder="470000">
-<button onclick="setDiv()">Set Divider</button>
-<label>Scale (k)</label><input id="scale" placeholder="1.0000">
-<button onclick="setScale()">Set Scale</button>
-<label>Calibrate to DMM (volts)</label><input id="calv" placeholder="3.640">
-<button onclick="calVbat()">VBAT CAL</button>
+<div class="btn-row"><button onclick="doVbat('query')">VBAT?</button></div>
+<div class="form-narrow">
+  <label>R1 (ohms)</label><input id="r1" placeholder="620000">
+  <label>R2 (ohms)</label><input id="r2" placeholder="470000">
+  <div class="btn-row"><button onclick="setDiv()">Set Divider</button></div>
+  <label>Scale (k)</label><input id="scale" placeholder="1.0000">
+  <div class="btn-row"><button onclick="setScale()">Set Scale</button></div>
+  <label>Calibrate to DMM (volts)</label><input id="calv" placeholder="3.640">
+  <div class="btn-row"><button onclick="calVbat()">VBAT CAL</button></div>
+</div>
 </section>
 <section><h3>Result</h3><pre id="out">—</pre></section>
 <p><a href="/">Home</a> • <a href="/status.html">Dashboard</a> • <a href="/update">OTA</a></p>
+</div>
 <script>
 async function doSoc(action){
   const r=await fetch('/api/soc?action='+encodeURIComponent(action));
@@ -1240,6 +1410,24 @@ async function calVbat(){
   const v=document.getElementById('calv').value||'';
   const r=await fetch('/api/vbat?action=calibrate&v='+encodeURIComponent(v));
   document.getElementById('out').textContent=await r.text();}
+
+async function loadTune(){
+  const r=await fetch('/api/tune?action=get'); const j=await r.json();
+  for(const k in j){ const el=document.getElementById(k); if(el){ el.value=j[k]; } }
+  document.getElementById('out').textContent=JSON.stringify(j);
+}
+async function saveTune(){
+  const ids=['on_dvdt','off_dvdt','on_hold','off_hold','full_hold','freeze_ms','chg_rate','d_rate','on_mindv','zero_dvdt','zero_hold'];
+  const qs=ids.map(id=> id+'='+encodeURIComponent(document.getElementById(id).value||'')).join('&');
+  const r=await fetch('/api/tune?action=set&'+qs);
+  document.getElementById('out').textContent=await r.text();
+}
+async function resetTune(){
+  const r=await fetch('/api/tune?action=reset');
+  const t=await r.text();
+  document.getElementById('out').textContent=t;
+  try{ await loadTune(); }catch(e){}
+}
 </script></body></html>
 )HTML";
     server.send_P(200, "text/html; charset=utf-8", page);
@@ -1341,6 +1529,129 @@ void handleApiVbat()
         }
         else
             server.send(400, "application/json", "{\"ok\":false,\"err\":\"bad_cal\"}");
+        return;
+    }
+    server.send(400, "application/json", "{\"ok\":false,\"err\":\"bad_action\"}");
+}
+
+void handleApiTune()
+{
+    if (!otaAuth())
+        return;
+    String action = server.arg("action");
+    if (action == "get")
+    {
+        String s = "{";
+        s += "\"on_dvdt\":" + String(gCfgChgOnDvdt, 3) + ",";
+        s += "\"off_dvdt\":" + String(gCfgChgOffDvdt, 3) + ",";
+        s += "\"on_hold\":" + String(gCfgChgOnHoldMs) + ",";
+        s += "\"off_hold\":" + String(gCfgChgOffHoldMs) + ",";
+        s += "\"full_hold\":" + String(gCfgFullHoldMs) + ",";
+        s += "\"freeze_ms\":" + String(gCfgChgFreezeMs) + ",";
+        s += "\"chg_rate\":" + String(gCfgChgPctRateMs) + ",";
+        s += "\"d_rate\":" + String(gCfgDischPctRateMs) + ",";
+        s += "\"on_mindv\":" + String(gCfgChgOnMinDv, 3) + ",";
+        s += "\"zero_dvdt\":" + String(gCfgChgOffZeroDvdt, 3) + ",";
+        s += "\"zero_hold\":" + String(gCfgChgOffZeroHoldMs);
+        s += "}";
+        server.send(200, "application/json", s);
+        return;
+    }
+    if (action == "set")
+    {
+        Preferences tp;
+        tp.begin("tune");
+        if (server.hasArg("on_dvdt"))
+        {
+            gCfgChgOnDvdt = server.arg("on_dvdt").toFloat();
+            tp.putFloat("on_dvdt", gCfgChgOnDvdt);
+        }
+        if (server.hasArg("off_dvdt"))
+        {
+            gCfgChgOffDvdt = server.arg("off_dvdt").toFloat();
+            tp.putFloat("off_dvdt", gCfgChgOffDvdt);
+        }
+        if (server.hasArg("on_hold"))
+        {
+            gCfgChgOnHoldMs = server.arg("on_hold").toInt();
+            tp.putUInt("on_hold", gCfgChgOnHoldMs);
+        }
+        if (server.hasArg("off_hold"))
+        {
+            gCfgChgOffHoldMs = server.arg("off_hold").toInt();
+            tp.putUInt("off_hold", gCfgChgOffHoldMs);
+        }
+        if (server.hasArg("full_hold"))
+        {
+            gCfgFullHoldMs = server.arg("full_hold").toInt();
+            tp.putUInt("full_hold", gCfgFullHoldMs);
+        }
+        if (server.hasArg("freeze_ms"))
+        {
+            gCfgChgFreezeMs = server.arg("freeze_ms").toInt();
+            tp.putUInt("freeze_ms", gCfgChgFreezeMs);
+        }
+        if (server.hasArg("chg_rate"))
+        {
+            gCfgChgPctRateMs = server.arg("chg_rate").toInt();
+            tp.putUInt("chg_rate", gCfgChgPctRateMs);
+        }
+        if (server.hasArg("d_rate"))
+        {
+            gCfgDischPctRateMs = server.arg("d_rate").toInt();
+            tp.putUInt("d_rate", gCfgDischPctRateMs);
+        }
+        if (server.hasArg("on_mindv"))
+        {
+            gCfgChgOnMinDv = server.arg("on_mindv").toFloat();
+            tp.putFloat("on_mindv", gCfgChgOnMinDv);
+        }
+        if (server.hasArg("zero_dvdt"))
+        {
+            gCfgChgOffZeroDvdt = server.arg("zero_dvdt").toFloat();
+            tp.putFloat("zero_dvdt", gCfgChgOffZeroDvdt);
+        }
+        if (server.hasArg("zero_hold"))
+        {
+            gCfgChgOffZeroHoldMs = server.arg("zero_hold").toInt();
+            tp.putUInt("zero_hold", gCfgChgOffZeroHoldMs);
+        }
+        tp.end();
+        server.send(200, "application/json", "{\"ok\":true}");
+        return;
+    }
+    if (action == "reset")
+    {
+        // Restore defaults and persist to NVS
+        gCfgChgOnDvdt = DEF_CHG_ON_DVDT_MV_S;
+        gCfgChgOffDvdt = DEF_CHG_OFF_DVDT_MV_S;
+        gCfgChgOnHoldMs = DEF_CHG_ON_HOLD_MS;
+        gCfgChgOffHoldMs = DEF_CHG_OFF_HOLD_MS;
+        gCfgFullDvdtMax = DEF_FULL_DVDT_MAX;
+        gCfgFullHoldMs = DEF_FULL_HOLD_MS;
+        gCfgChgFreezeMs = DEF_CHG_FREEZE_MS;
+        gCfgChgPctRateMs = DEF_CHG_PCT_RATE_MS;
+        gCfgDischPctRateMs = DEF_DISCH_PCT_RATE_MS;
+        gCfgChgOnMinDv = DEF_CHG_ON_MIN_DV;
+        gCfgChgOffZeroDvdt = DEF_CHG_OFF_ZERO_DVDT;
+        gCfgChgOffZeroHoldMs = DEF_CHG_OFF_ZERO_HOLD_MS;
+
+        Preferences tp;
+        tp.begin("tune");
+        tp.putFloat("on_dvdt", gCfgChgOnDvdt);
+        tp.putFloat("off_dvdt", gCfgChgOffDvdt);
+        tp.putUInt("on_hold", gCfgChgOnHoldMs);
+        tp.putUInt("off_hold", gCfgChgOffHoldMs);
+        tp.putFloat("full_dvdt", gCfgFullDvdtMax);
+        tp.putUInt("full_hold", gCfgFullHoldMs);
+        tp.putUInt("freeze_ms", gCfgChgFreezeMs);
+        tp.putUInt("chg_rate", gCfgChgPctRateMs);
+        tp.putUInt("d_rate", gCfgDischPctRateMs);
+        tp.putFloat("on_mindv", gCfgChgOnMinDv);
+        tp.putFloat("zero_dvdt", gCfgChgOffZeroDvdt);
+        tp.putUInt("zero_hold", gCfgChgOffZeroHoldMs);
+        tp.end();
+        server.send(200, "application/json", "{\"ok\":true,\"reset\":true}");
         return;
     }
     server.send(400, "application/json", "{\"ok\":false,\"err\":\"bad_action\"}");
@@ -1484,13 +1795,13 @@ void handleStatusJson()
     json += "\"ip\":\"" + WiFi.localIP().toString() + "\"";
     json += "},";
 
-    // Battery state string for easier client use
+    // Battery state string for easier client use (trend-based)
     String bstate = "discharge";
     if (battNoBatt)
         bstate = "no_batt";
-    else if (battFull)
+    else if (gTrendFull)
         bstate = "full";
-    else if (battCharging)
+    else if (gTrendCharging)
         bstate = "charging";
 
     json += "\"battery\":{";
@@ -1556,7 +1867,7 @@ void handleStatusHtml()
     static const char PROGMEM html[] = R"HTML(
 <!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>FlukeBridge – Status</title>
+<title>FlukeBridge - Status</title>
 <style>
 :root{--bg:#0b1220;--fg:#e8eef7;--card:#121a2a;--border:#1b2540;--ok:#96f59b;--warn:#ffd479;--crit:#ff7b7b;--accent:#3aa7ff}
 *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,sans-serif}
@@ -1668,8 +1979,8 @@ void registerOtaRoutes()
         if (!otaAuth()) return;
         static const char PROGMEM page[] = R"HTML(
 <!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>FlukeBridge – OTA Update</title></head><body style="font-family:sans-serif;padding:16px">
-<h2>OTA Update (ver3.3)</h2>
+<title>FlukeBridge - OTA Update</title></head><body style="font-family:sans-serif;padding:16px">
+<h2>OTA Update (ver3.3.1)</h2>
 <form method="POST" action="/update" enctype="multipart/form-data">
   <input type="file" name="update" accept=".bin,application/octet-stream"><br><br>
   <button type="submit">Upload & Flash</button>
@@ -1743,6 +2054,25 @@ void setup()
     // Load SoC calibration (USB-set)
     loadSocCal();
 
+    // Load tuning thresholds (charging/full detection & UI behavior)
+    {
+        Preferences tp;
+        tp.begin("tune");
+        gCfgChgOnDvdt = tp.getFloat("on_dvdt", DEF_CHG_ON_DVDT_MV_S);
+        gCfgChgOffDvdt = tp.getFloat("off_dvdt", DEF_CHG_OFF_DVDT_MV_S);
+        gCfgChgOnHoldMs = tp.getUInt("on_hold", DEF_CHG_ON_HOLD_MS);
+        gCfgChgOffHoldMs = tp.getUInt("off_hold", DEF_CHG_OFF_HOLD_MS);
+        gCfgFullDvdtMax = tp.getFloat("full_dvdt", DEF_FULL_DVDT_MAX);
+        gCfgFullHoldMs = tp.getUInt("full_hold", DEF_FULL_HOLD_MS);
+        gCfgChgFreezeMs = tp.getUInt("freeze_ms", DEF_CHG_FREEZE_MS);
+        gCfgChgPctRateMs = tp.getUInt("chg_rate", DEF_CHG_PCT_RATE_MS);
+        gCfgDischPctRateMs = tp.getUInt("d_rate", DEF_DISCH_PCT_RATE_MS);
+        gCfgChgOnMinDv = tp.getFloat("on_mindv", DEF_CHG_ON_MIN_DV);
+        gCfgChgOffZeroDvdt = tp.getFloat("zero_dvdt", DEF_CHG_OFF_ZERO_DVDT);
+        gCfgChgOffZeroHoldMs = tp.getUInt("zero_hold", DEF_CHG_OFF_ZERO_HOLD_MS);
+        tp.end();
+    }
+
     // Wi-Fi up
     connectOrStartAP();
 
@@ -1754,6 +2084,7 @@ void setup()
     server.on("/config", HTTP_GET, handleConfigPage);
     server.on("/api/soc", HTTP_GET, handleApiSoc);
     server.on("/api/vbat", HTTP_GET, handleApiVbat);
+    server.on("/api/tune", HTTP_GET, handleApiTune);
     // Root handler was bound in connectOrStartAP/startConfigAP
     server.begin();
     Serial.println("[HTTP] Web server started");

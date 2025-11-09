@@ -22,5 +22,5 @@ jobs:
           name: ${{ github.ref_name }} – Fluke Bridge
           body_path: CHANGELOG.md
           files: |
-            FlukeBridge-ver*-XIAO-ESP32C3.bin
+            FlukeBridge-ver${{ replace(github.ref_name, 'v', '') }}-XIAO-ESP32C3.bin
             SHA256SUMS.txt

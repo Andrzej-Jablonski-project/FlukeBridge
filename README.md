@@ -352,3 +352,27 @@ Open `/config` (same Basic Auth as OTA). You can:
 - Query VBAT, set divider (R1/R2), set scale, or calibrate to DMM voltage
 
 Under the hood, this calls `/api/soc` and `/api/vbat` endpoints that return JSON (usable from scripts, too).
+
+### 🔋 Charging/Full Tuning (Advanced)
+
+Open `/config` and use the “Charging/Full detection – Advanced” section to tune runtime behavior (saved in NVS, no reflash needed). Fields:
+
+- on_dvdt (mV/s) – minimum positive slope of filtered VBAT to enter CHARGING
+- on_hold (ms) – how long the slope must hold to confirm CHARGING
+- on_mindv (V) – minimum net VBAT rise during on_hold (filters false positives)
+- off_dvdt (mV/s) – negative slope magnitude to exit CHARGING
+- off_hold (ms) – how long the negative slope must hold to exit CHARGING
+- zero_dvdt (mV/s) – absolute |dV/dt| considered ~flat
+- zero_hold (ms) – flat duration to exit CHARGING (handles post‑unplug rebound)
+- full_hold (ms) – time near VBAT_FULL with flat slope to mark FULL
+- freeze_ms – percent “freeze” duration after entering CHARGING (prevents immediate jump)
+- chg_rate (ms) – while CHARGING: max +1% every N ms
+- d_rate (ms) – while DISCHARGE: ±1% every N ms
+
+API endpoints (JSON):
+- GET `/api/tune?action=get` → returns current values
+- GET `/api/tune?action=set&on_dvdt=0.8&on_hold=6000&on_mindv=0.015&off_dvdt=0.2&off_hold=8000&zero_dvdt=0.05&zero_hold=120000&full_hold=20000&freeze_ms=15000&chg_rate=30000&d_rate=5000`
+
+Notes:
+- All values persist in NVS under the `tune` namespace.
+- Defaults are chosen for typical 18650 behavior; adjust if your pack/charger is different.
