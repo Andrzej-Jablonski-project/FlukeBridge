@@ -15,3 +15,4 @@ Arduino*/
 *.zip
 fluke_status.txt
 fluke_value.txt
+release-archive/
