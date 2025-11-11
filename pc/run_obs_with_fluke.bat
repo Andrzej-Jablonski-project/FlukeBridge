@@ -18,10 +18,14 @@ echo [RUN] Probing %URL% ...
 powershell -NoProfile -Command "try{ (Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 -Uri '%URL%') | Out-Null; exit 0 } catch { exit 1 }"
 if %ERRORLEVEL% EQU 0 (
   echo [RUN] HTTP available – using %URL%
-  start "fluke_read_http" /B cmd /C "py -3 %~dp0fluke_read.py --http %URL%"
+  REM Recommended flags: lower latency and CSV only on change
+  set "FLAGS=--no-fsync --write-interval 0 --csv-on-change"
+  start "fluke_read_http" /B cmd /C "py -3 %~dp0fluke_read.py --http %URL% %FLAGS%"
 ) else (
   echo [RUN] HTTP unavailable – using USB %SER%
-  start "fluke_read_usb" /B cmd /C "py -3 %~dp0fluke_read.py --serial %SER%"
+  set "FLAGS=--no-fsync --write-interval 0 --csv-on-change"
+  if not defined QS_GAP_MS set "QS_GAP_MS=60"
+  start "fluke_read_usb" /B cmd /C "py -3 %~dp0fluke_read.py --serial %SER% %FLAGS% --qs-gap-ms %QS_GAP_MS%"
 )
 
 REM Try to launch OBS if installed in default location (optional)
