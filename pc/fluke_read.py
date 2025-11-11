@@ -4,32 +4,52 @@
 import os, sys, time, math, json, socket, argparse, re
 from datetime import datetime
 
-# ── opcjonalnie: pyserial (tylko dla trybu USB) ───────────────────────────────
+# ── Optional: pyserial (USB mode only) ────────────────────────────────────────
 try:
-    import serial  # noqa: F401  # import sprawdzany w klasie SerialTransport
+    import serial  # noqa: F401  # import checked in SerialTransport class
 except Exception:
     pass
 
-# ── ŚCIEŻKI ────────────────────────────────────────────────────────────────────
-BASE_DIR   = "/home/andrzej/fluke"
-VALUE_TXT  = f"{BASE_DIR}/fluke_value.txt"
-STATUS_TXT = f"{BASE_DIR}/fluke_status.txt"
-LOG_CSV    = f"{BASE_DIR}/fluke_log.csv"
-DEBUG_LOG  = f"{BASE_DIR}/fluke_debug.log"
+# ── Paths ─────────────────────────────────────────────────────────────────────
+# Default: write into the folder where this script resides (portable).
+# You can override the output directory using the FLUKE_DIR environment
+# variable or the command-line flag: --dir <path> (see entrypoint below).
+def _default_base_dir():
+    try:
+        return os.path.dirname(os.path.abspath(__file__))
+    except Exception:
+        # fallback: current working directory
+        return os.getcwd()
 
-# ── PORT ───────────────────────────────────────────────────────────────────────
+def set_base_dir(path: str):
+    global BASE_DIR, VALUE_TXT, STATUS_TXT, LOG_CSV, DEBUG_LOG
+    BASE_DIR = os.path.abspath(path)
+    VALUE_TXT  = os.path.join(BASE_DIR, "fluke_value.txt")
+    STATUS_TXT = os.path.join(BASE_DIR, "fluke_status.txt")
+    LOG_CSV    = os.path.join(BASE_DIR, "fluke_log.csv")
+    DEBUG_LOG  = os.path.join(BASE_DIR, "fluke_debug.log")
+
+# Initialize base directory (ENV → defaults to script directory)
+set_base_dir(os.environ.get("FLUKE_DIR", _default_base_dir()))
+
+# ── Port ──────────────────────────────────────────────────────────────────────
 SER_PORT = "/dev/ttyACM0"
 BAUD     = 115200
 TIMEOUT  = 0.1
 WRITE_TIMEOUT = 0.1
 
-# ── CZASY ──────────────────────────────────────────────────────────────────────
+# ── Thresholds / timings ──────────────────────────────────────────────────────
 OL_OHM_THRESHOLD    = 1e8
 OL_DIODE_THRESHOLD  = 2.5
+F_OL_EPS_FARADS     = 1e-12  # treat <= 1 pF as OL when in HOLD/open
+TEMP_C_MIN          = -273.15
+TEMP_C_MAX          = 1000.0
+TEMP_F_MIN          = -459.67
+TEMP_F_MAX          = 1832.0
 HOLD_TIME_S         = 0.7
 OFF_TIMEOUT_S       = 2.0
 
-# ── ROZPOZNAWANIE ─────────────────────────────────────────────────────────────
+# ── Normalization / recognition ───────────────────────────────────────────────
 VALID_UNITS = {
     "VDC","VAC","ADC","AAC","OHM","Ω","HZ","F","H","DIODE",
     "TEMP_C","TEMP_F",
@@ -40,14 +60,14 @@ OHM_LIKE    = {"OHM","Ω","F","DIODE","TEMP_C","TEMP_F"}
 NUM_RE = re.compile(r"^[\+\-]?\d+(?:\.\d+)?(?:[eE][\+\-]?\d+)?$")
 ACDC_RE = re.compile(r"\b(AC\s*[,/ ]\s*DC|DC\s*[,/ ]\s*AC)\b", re.IGNORECASE)
 
-# ── FUNKCJE POMOCNICZE ────────────────────────────────────────────────────────
+# ── Helper functions ──────────────────────────────────────────────────────────
 def normalize_unit(unit_raw: str) -> str:
     if not unit_raw:
         return ""
     u = unit_raw.upper()
     if "DIODE" in u:
         return "DIODE"
-    # temperatura
+    # temperature
     if u in ("C","°C","CEL","CELSIUS","DEG C","DEGC","DEG_C"):
         return "TEMP_C"
     if u in ("FAR","FAH","FAHR","FAHRENHEIT","DEG F","DEGF","DEG_F","°F"):
@@ -108,6 +128,15 @@ def map_unit(unit_code):
     return (u, "")
 
 def is_trash_frame(raw: str) -> bool:
+    if not raw:
+        return True
+    s = raw.upper()
+    # Filter out transient garbage during mode switches, e.g., GLIMBO/GNONE
+    if "GLIMBO" in s or "GNONE" in s or "LIMBO" in s:
+        return True
+    # Only accept frames that look like QM/QS: exactly 3 commas (4 fields)
+    if s.count(',') != 3:
+        return True
     return False
 
 _NUMERIC = re.compile(r'^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:E[+-]?\d+)?$')
@@ -170,9 +199,16 @@ def detect_ol(val, unit_code, mode, extra):
         return True
     if unit_code in ("OHM","Ω"):   return (val is None) or (abs(val) >= OL_OHM_THRESHOLD)
     if unit_code == "DIODE":       return (val is None) or (val >= OL_DIODE_THRESHOLD)
-    if unit_code == "F":           return (val is None) or (val <= 0)
-    if unit_code in ("TEMP_C","TEMP_F"):
+    if unit_code == "F":           return (val is None) or (val <= 0) or (isinstance(val, (int,float)) and val <= F_OL_EPS_FARADS)
+    if unit_code == "TEMP_C":
         if (val is None) or ("OPEN_TC" in (mode or "")) or ("OPEN_TC" in (extra or "")):
+            return True
+        if isinstance(val, (int, float)) and (val < TEMP_C_MIN or val > TEMP_C_MAX):
+            return True
+    if unit_code == "TEMP_F":
+        if (val is None) or ("OPEN_TC" in (mode or "")) or ("OPEN_TC" in (extra or "")):
+            return True
+        if isinstance(val, (int, float)) and (val < TEMP_F_MIN or val > TEMP_F_MAX):
             return True
     return False
 
@@ -186,7 +222,7 @@ def format_for_obs(val, unit_code, mode, extra):
         return "—"
     pretty = si_format(val, base_unit)
     if suffix in ("AC","DC","AC+DC"): return f"{pretty} {suffix}"
-    if suffix == "DIODE":             return f"{pretty} (dioda)"
+    if suffix == "DIODE":             return f"{pretty} (diode)"
     return pretty
 
 def safe_write(path, text):
@@ -210,7 +246,7 @@ def log_debug(raw, parsed):
         f.write(f"{ts} | RAW='{raw}' | unit_raw='{unit_raw}' | unit_code='{unit_code}' | "
                 f"mode='{mode}' | extra='{extra}' | val='{val}' | ok={ok}\n")
 
-# ── Transporty (USB / TCP) ────────────────────────────────────────────────────
+# ── Transports (USB / TCP) ───────────────────────────────────────────────────
 class Transport:
     def write(self, data: bytes): ...
     def read_until(self, delim: bytes, timeout_s: float) -> bytes: ...
@@ -316,7 +352,7 @@ def open_transport(args):
     else:
         return SerialTransport(args.serial, BAUD, TIMEOUT, WRITE_TIMEOUT)
 
-# ── Zapytania QM/QS (dla USB/TCP) ─────────────────────────────────────────────
+# ── QM/QS queries (USB/TCP) ──────────────────────────────────────────────────
 def query_qm(tr):
     if not isinstance(tr, TcpTransport):
         tr.reset_input_buffer()
@@ -354,15 +390,20 @@ def http_loop(args):
     while True:
         try:
             j = http_fetch_status(args.http, timeout=1.5)
-            # Preferuj strukturę: { fluke:{ pretty,value,unit,status,ol,... }, battery:{...}, wifi:{...} }
+            # Prefer structure: { fluke:{ value,unit,mode,flags,status,ol,... }, battery:{...}, wifi:{...} }
             fl = j.get("fluke", {})
-            pretty = fl.get("pretty")
-            if not pretty:
-                v = fl.get("value") or ""
-                u = fl.get("unit") or ""
-                pretty = (v + (" " + u if u else "")) if v else "—"
+            # Build pretty text ourselves to ensure consistent formatting (e.g., AC+DC)
+            v_raw = fl.get("value")
+            try:
+                val = float(v_raw) if v_raw not in (None, "", "OL") else None
+            except Exception:
+                val = None
+            unit_code = normalize_unit(fl.get("unit") or "")
+            mode = (fl.get("mode") or "")
+            extra = (fl.get("flags") or "")
+            pretty = format_for_obs(val, unit_code, mode, extra)
 
-            # status: użyj z JSON jeśli jest; w przeciwnym razie heurystyka
+            # status: use JSON if present; otherwise heuristic
             status = (fl.get("status") or "").upper()
             if status not in {"LIVE","HOLD","OFF"}:
                 if pretty in ("—", "", None):
@@ -374,15 +415,16 @@ def http_loop(args):
 
             now = time.time()
             if (now - last_write_ts) >= 0.2 or pretty != last_pretty or status != last_status:
-                safe_write(VALUE_TXT, pretty + "\n")
-                sym = {"LIVE":"● LIVE\n","HOLD":"○ HOLD\n","OFF":"■ OFF\n"}[status]
-                safe_write(STATUS_TXT, sym)
+                # Freeze value during HOLD to avoid transient garbage, but still show OL
+                if status != "HOLD" or pretty == "OL":
+                    safe_write(VALUE_TXT, pretty + "\n")
+                safe_write(STATUS_TXT, status + "\n")
                 last_pretty = pretty
                 last_status = status
                 last_write_ts = now
                 print(pretty, "[", status, "]")
 
-            # opcjonalny CSV z /status.json (tylko fluke)
+            # optional CSV from /status.json (fluke only)
             ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             with open(LOG_CSV, "a", encoding="utf-8") as f:
                 f.write(f"{ts},,,,{fl.get('status','')},{fl.get('flags','')},{pretty},,\n")
@@ -390,14 +432,14 @@ def http_loop(args):
             time.sleep(0.5)
 
         except KeyboardInterrupt:
-            print("\nZakończono.")
+            print("\nStopped.")
             sys.exit(0)
         except Exception as e:
-            # chwilowe błędy sieci nie mają od razu gasić na „OFF”
+            # transient network errors should not immediately force OFF
             print(f"[HTTP WARN] {e}")
             time.sleep(0.8)
 
-# ── PĘTLA GŁÓWNA (USB/TCP) ───────────────────────────────────────────────────
+# ── Main loop (USB/TCP) ──────────────────────────────────────────────────────
 def serial_tcp_loop(args):
     ensure_paths()
     tr = None
@@ -443,6 +485,11 @@ def serial_tcp_loop(args):
 
             mx_blob = f"{unit_raw or ''} {mode or ''} {extra or ''}"
             two_channel = bool(ACDC_RE.search(mx_blob))
+            # If unit explicitly signals AC+DC, show combined value (e.g., "10 V AC+DC")
+            # instead of AC|DC split view
+            base_primary, suf_hint = map_unit(unit_code)
+            if (suf_hint or "").upper() == "AC+DC":
+                two_channel = False
             order_ac_first = True
             m_acdc = ACDC_RE.search(mx_blob)
             if m_acdc:
@@ -472,7 +519,7 @@ def serial_tcp_loop(args):
                     _, suf2 = map_unit(u2)
                     suf2 = (suf2 or "").upper()
                     if   suf2 == "AC": ac_pretty = sec_pretty
-                    elif suf2 == "DC": dc_pretty = sec_prety  # <- literówka celowo?
+                    elif suf2 == "DC": dc_pretty = sec_pretty
                 else:
                     if v2 is not None:
                         base_primary, _ = map_unit(unit_code)
@@ -534,9 +581,10 @@ def serial_tcp_loop(args):
                     last_change_ts = now
                     last_pretty = pretty
                 last_write_ts = now
-                sym = {"LIVE":"● LIVE\n","HOLD":"○ HOLD\n","OFF":"■ OFF\n"}[status]
-                safe_write(VALUE_TXT, pretty + "\n")
-                safe_write(STATUS_TXT, sym)
+                # Freeze value during HOLD to avoid transient garbage, but still show OL
+                if status != "HOLD" or pretty == "OL":
+                    safe_write(VALUE_TXT, pretty + "\n")
+                safe_write(STATUS_TXT, status + "\n")
                 last_status = status
                 print(f"{pretty}   [Δt={delta_s or '—'} s]   [{status}]")
 
@@ -547,7 +595,7 @@ def serial_tcp_loop(args):
             time.sleep(0.05)
 
         except KeyboardInterrupt:
-            print("\nZakończono.")
+            print("\nStopped.")
             try:
                 if tr: tr.close()
             except: pass
@@ -560,13 +608,17 @@ def serial_tcp_loop(args):
             tr = None
             time.sleep(0.5)
 
-# ── entrypoint ────────────────────────────────────────────────────────────────
+# ── Entrypoint ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--http", help="URL do /status.json na ESP (np. http://fluke-bridge.local/status.json)")
-    ap.add_argument("--serial", default=SER_PORT, help="np. /dev/ttyACM0 (dla trybu USB)")
-    ap.add_argument("--tcp", help="host:port (np. 192.168.1.50:28700) — dla trybu TCP mostka")
+    ap.add_argument("--http", help="URL to /status.json on ESP (e.g., http://fluke-bridge.local/status.json)")
+    ap.add_argument("--serial", default=SER_PORT, help="e.g., /dev/ttyACM0 (USB mode)")
+    ap.add_argument("--tcp", help="host:port (e.g., 192.168.1.50:28700) — TCP bridge mode")
+    ap.add_argument("--dir", help="output directory for fluke_*.txt/csv (default: this script's folder or FLUKE_DIR)")
     args = ap.parse_args()
+
+    if args.dir:
+        set_base_dir(args.dir)
 
     if args.http:
         http_loop(args)

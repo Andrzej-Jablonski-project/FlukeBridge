@@ -15,4 +15,8 @@ Arduino*/
 *.zip
 fluke_status.txt
 fluke_value.txt
+pc/fluke_status.txt
+pc/fluke_value.txt
+pc/fluke_log.csv
+pc/fluke_debug.log
 release-archive/

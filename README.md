@@ -214,8 +214,11 @@ Options
 | `--http <url>`| Use HTTP mode                  |
 | `--serial <p>`| Use serial mode (USB CDC)      |
 | `--tcp h:p`   | Optional TCP bridge mode       |
+| `--dir <path>`| Output folder for text/CSV     |
 
 Output files
+
+By default files are written next to the script (pc/ folder). You can override the folder with `--dir <path>` or environment variable `FLUKE_DIR`.
 
 | File              | Purpose                           |
 |-------------------|-----------------------------------|
@@ -224,9 +227,9 @@ Output files
 
 ## 🎥 OBS Integration
 
-In OBS add two Text sources (Read from file):
-- `fluke_value.txt` → measurement
-- `fluke_status.txt` → status
+In OBS add two Text sources (Read from file) pointing to files in the same folder as `pc/fluke_read.py` (unless you used `--dir`):
+- `pc/fluke_value.txt` → measurement
+- `pc/fluke_status.txt` → status
 
 Then run (prefers HTTP, falls back to USB):
 ```
@@ -339,7 +342,7 @@ pc\run_obs_with_fluke.bat
 ```
 
 5) OBS on Windows
-- Add two Text (GDI+) sources → Read from file: `fluke_value.txt`, `fluke_status.txt` from the repo folder.
+- Add two Text (GDI+) sources → Read from file: `pc\fluke_value.txt`, `pc\fluke_status.txt` (same folder as the script), or the folder passed with `--dir`.
 - Run the reader (HTTP preferred). Files update about once per second.
 
 ## 🔁 Wi‑Fi Reset (BOOT)
