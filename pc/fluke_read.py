@@ -38,6 +38,14 @@ BAUD     = 115200
 TIMEOUT  = 0.1
 WRITE_TIMEOUT = 0.1
 
+# ── Performance tuning (CLI/env) ─────────────────────────────────────────────
+# Keep defaults compatible with previous behavior. You can override via
+# flags or environment variables.
+REWRITE_INTERVAL_S = float(os.environ.get("FLUKE_WRITE_INTERVAL_S", "0.2"))
+QS_GAP_MS          = int(float(os.environ.get("FLUKE_QS_GAP_MS", "80")))
+CSV_ON_CHANGE      = os.environ.get("FLUKE_CSV_ON_CHANGE", "0") == "1"
+USE_FSYNC          = not (os.environ.get("FLUKE_NO_FSYNC", "0") == "1")
+
 # ── Thresholds / timings ──────────────────────────────────────────────────────
 OL_OHM_THRESHOLD    = 1e8
 OL_DIODE_THRESHOLD  = 2.5
@@ -228,8 +236,9 @@ def format_for_obs(val, unit_code, mode, extra):
 def safe_write(path, text):
     with open(path, "w", encoding="utf-8") as f:
         f.write(text)
-        f.flush()
-        os.fsync(f.fileno())
+        if USE_FSYNC:
+            f.flush()
+            os.fsync(f.fileno())
 
 def ensure_paths():
     os.makedirs(BASE_DIR, exist_ok=True)
@@ -414,7 +423,8 @@ def http_loop(args):
                     status = "LIVE"
 
             now = time.time()
-            if (now - last_write_ts) >= 0.2 or pretty != last_pretty or status != last_status:
+            should_write = (now - last_write_ts) >= REWRITE_INTERVAL_S or pretty != last_pretty or status != last_status
+            if should_write:
                 # Freeze value during HOLD to avoid transient garbage, but still show OL
                 if status != "HOLD" or pretty == "OL":
                     safe_write(VALUE_TXT, pretty + "\n")
@@ -425,9 +435,12 @@ def http_loop(args):
                 print(pretty, "[", status, "]")
 
             # optional CSV from /status.json (fluke only)
-            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            with open(LOG_CSV, "a", encoding="utf-8") as f:
-                f.write(f"{ts},,,,{fl.get('status','')},{fl.get('flags','')},{pretty},,\n")
+            if CSV_ON_CHANGE and not should_write:
+                pass
+            else:
+                ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                with open(LOG_CSV, "a", encoding="utf-8") as f:
+                    f.write(f"{ts},,,,{fl.get('status','')},{fl.get('flags','')},{pretty},,\n")
 
             time.sleep(0.5)
 
@@ -509,7 +522,7 @@ def serial_tcp_loop(args):
                     if order_ac_first: ac_pretty = main_pretty
                     else:              dc_pretty = main_pretty
 
-                time.sleep(0.08)
+                time.sleep(max(0.0, QS_GAP_MS / 1000.0))
                 raw2 = query_qs(tr)
                 v2, u2, m2, e2, ur2, ok2 = parse_response(raw2)
                 log_debug(raw2, (v2, u2, m2, e2, ur2, ok2))
@@ -575,7 +588,8 @@ def serial_tcp_loop(args):
                     pretty = last_pretty if last_pretty else "—"
 
             delta_s = ""
-            if pretty != last_pretty or status != last_status or (now - last_write_ts) >= 0.2:
+            should_write = (now - last_write_ts) >= REWRITE_INTERVAL_S or pretty != last_pretty or status != last_status
+            if should_write:
                 if pretty != last_pretty:
                     delta_s = f"{(now - last_change_ts):.1f}"
                     last_change_ts = now
@@ -588,9 +602,12 @@ def serial_tcp_loop(args):
                 last_status = status
                 print(f"{pretty}   [Δt={delta_s or '—'} s]   [{status}]")
 
-            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            with open(LOG_CSV, "a", encoding="utf-8") as f:
-                f.write(f"{ts},{val if val is not None else ''},{unit_raw},{unit_code or ''},{mode},{extra},{pretty},{delta_s},{status}\n")
+            if CSV_ON_CHANGE and not should_write:
+                pass
+            else:
+                ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                with open(LOG_CSV, "a", encoding="utf-8") as f:
+                    f.write(f"{ts},{val if val is not None else ''},{unit_raw},{unit_code or ''},{mode},{extra},{pretty},{delta_s},{status}\n")
 
             time.sleep(0.05)
 
@@ -615,10 +632,24 @@ if __name__ == "__main__":
     ap.add_argument("--serial", default=SER_PORT, help="e.g., /dev/ttyACM0 (USB mode)")
     ap.add_argument("--tcp", help="host:port (e.g., 192.168.1.50:28700) — TCP bridge mode")
     ap.add_argument("--dir", help="output directory for fluke_*.txt/csv (default: this script's folder or FLUKE_DIR)")
+    ap.add_argument("--no-fsync", action="store_true", help="disable fsync() on writes (lower latency, less disk wear)")
+    ap.add_argument("--write-interval", type=float, default=None, help="min seconds between periodic rewrites (default 0.2; 0 disables periodic rewrites)")
+    ap.add_argument("--qs-gap-ms", type=int, default=None, help="delay between QM and QS reads in two-channel mode (ms; default 80)")
+    ap.add_argument("--csv-on-change", action="store_true", help="append CSV only when output changed (instead of every loop)")
     args = ap.parse_args()
 
     if args.dir:
         set_base_dir(args.dir)
+
+    # Apply performance flags (CLI overrides env)
+    if args.no_fsync:
+        USE_FSYNC = False
+    if args.write_interval is not None:
+        REWRITE_INTERVAL_S = max(0.0, float(args.write_interval))
+    if args.qs_gap_ms is not None:
+        QS_GAP_MS = max(0, int(args.qs_gap_ms))
+    if args.csv_on_change:
+        CSV_ON_CHANGE = True
 
     if args.http:
         http_loop(args)
