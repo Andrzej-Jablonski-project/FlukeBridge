@@ -239,6 +239,18 @@ cd pc
 
 Values refresh about every second.
 
+**OBS Lua Script**
+- Location: `pc/fluke_status_symbol_freetype.lua`.
+- Purpose: updates a Text (FreeType2) source to show plain status text (LIVE/HOLD/OFF) and color; reads `fluke_status.txt`.
+- Setup:
+  - In OBS: Tools -> Scripts -> + -> select `pc/fluke_status_symbol_freetype.lua`.
+  - Set "Source name (FreeType2)" to the name of your Text (FreeType2) source.
+  - Set "Status file" to the path of `fluke_status.txt` (default lives next to `pc/fluke_read.py`, or in the folder you passed via `--dir`/`FLUKE_DIR`).
+  - Optionally adjust "Interval (ms)" and colors for LIVE/HOLD/OFF.
+- Notes:
+  - The script disables "Read from file" and sets the text directly on the source.
+  - No symbols are used; status text is exactly "LIVE", "HOLD", or "OFF".
+
 ## 🛠 Dependencies
 
 - Arduino IDE and esp32 board (v3.0+)
