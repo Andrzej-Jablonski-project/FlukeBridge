@@ -258,6 +258,12 @@ cd pc
 
 Values refresh about every second.
 
+Note (launchers):
+- The launch scripts use the recommended performance flags by default: `--no-fsync --write-interval 0 --csv-on-change` (and `--qs-gap-ms 60` for USB).
+- You can override them when launching:
+  - Linux/macOS: `FLAGS="--no-fsync --write-interval 0" QS_GAP_MS=80 ./run_obs_with_fluke.sh`
+  - Windows (BAT): set `QS_GAP_MS` before running, or edit `FLAGS` in the BAT file.
+
 **OBS Lua Script**
 - Location: `pc/fluke_status_symbol_freetype.lua`.
 - Purpose: updates a Text (FreeType2) source to show plain status text (LIVE/HOLD/OFF) and color; reads `fluke_status.txt`.
