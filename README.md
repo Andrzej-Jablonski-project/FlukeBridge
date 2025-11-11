@@ -216,6 +216,25 @@ Options
 | `--tcp h:p`   | Optional TCP bridge mode       |
 | `--dir <path>`| Output folder for text/CSV     |
 
+Performance tips
+
+You can tune I/O latency and update behavior without changing defaults:
+
+- `--no-fsync` or `FLUKE_NO_FSYNC=1` – disable fsync() on writes (lower latency, less disk wear).
+- `--write-interval <s>` or `FLUKE_WRITE_INTERVAL_S` – minimum seconds between periodic rewrites (default 0.2). Use `0` to rewrite only on change.
+- `--qs-gap-ms <ms>` or `FLUKE_QS_GAP_MS` – delay between QM and QS reads in two‑channel mode (default 80 ms).
+- `--csv-on-change` or `FLUKE_CSV_ON_CHANGE=1` – append to CSV only when output changed (instead of every loop).
+
+Examples
+```
+# Lower latency file updates and only on change
+python3 pc/fluke_read.py --http http://fluke-bridge.local/status.json \
+  --no-fsync --write-interval 0 --csv-on-change
+
+# Faster AC/DC second read gap (if stable in your setup)
+python3 pc/fluke_read.py --serial /dev/ttyACM0 --qs-gap-ms 40
+```
+
 Output files
 
 By default files are written next to the script (pc/ folder). You can override the folder with `--dir <path>` or environment variable `FLUKE_DIR`.
