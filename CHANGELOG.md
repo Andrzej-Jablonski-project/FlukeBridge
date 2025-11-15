@@ -3,17 +3,22 @@ Changelog
 
 All notable changes to this project will be documented in this file.
 
+3.3.3 – Per-version release notes (CI)
+- GitHub Actions: release body shows only the changes for the current version (extracted from CHANGELOG into RELEASE_NOTES.md).
+- Script: tools/release.sh checks if tag `v<VER>` already exists before creating it.
+- Note: before tagging, ensure the binary `FlukeBridge-ver<VER>-XIAO-ESP32C3.bin` is present and SHA256 is updated (the script does this), then tag.
+
+3.3.2 – Battery charge/full detection tuning
+- Trend-based charging detection thresholds relaxed: on >= +0.30 mV/s for 4 s (>=10 mV total), off on <= −0.15 mV/s for 6 s; near‑zero slope off after 60 s (<= 0.03 mV/s).
+- FULL detection now uses SoC calibration: considers full when normalized VBAT is within ~20 mV of reference full and slope is flat for 15 s.
+- Effect: charging state is recognized earlier and percentage no longer jumps during charging (rate limiting applies while CHARGING).
+
 3.3.1 – Config UI + performance
 - Config page: responsive 3/2/1‑column grid for Advanced tuning (no overflow on focus).
 - Config page: added "Restore defaults" button for tuning (persists in NVS).
 - Config page: Result box wraps/scrolls long lines (no overflow outside card).
 - ADC sampling: VBAT read averages 4 samples without per‑sample delays (snappier UI).
 - Firmware version bump to `ver3.3.1` (shown in UI/OTA).
-
-3.3.2 – Battery charge/full detection tuning
-- Trend-based charging detection thresholds relaxed: on >= +0.30 mV/s for 4 s (>=10 mV total), off on <= −0.15 mV/s for 6 s; near‑zero slope off after 60 s (<= 0.03 mV/s).
-- FULL detection now uses SoC calibration: considers full when normalized VBAT is within ~20 mV of reference full and slope is flat for 15 s.
-- Effect: charging state is recognized earlier i procent nie skacze szybko podczas ładowania (działa rate limiting dla CHARGE).
 
 3.3 – Filtered VBAT + deep sleep
 - Add exponential filter and hysteresis for battery voltage/LED.

@@ -17,13 +17,17 @@ jobs:
       - name: Compute version (strip 'v' prefix)
         run: echo "VER=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
 
+      - name: Extract release notes for this version
+        run: |
+          bash tools/extract_release_notes.sh "$VER"
+
       - name: Create GitHub Release (auto-publish)
         uses: softprops/action-gh-release@v1
         with:
           draft: false
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }} – Fluke Bridge
-          body_path: CHANGELOG.md
+          body_path: RELEASE_NOTES.md
           files: |
             FlukeBridge-ver${{ env.VER }}-XIAO-ESP32C3.bin
             SHA256SUMS.txt

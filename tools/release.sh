@@ -20,6 +20,11 @@ if [[ ! -f "$BIN" ]]; then
   exit 2
 fi
 
+if git tag -l | grep -qx "v$VER"; then
+  echo "Error: tag v$VER already exists. Choose a new version or delete the tag." >&2
+  exit 3
+fi
+
 echo "Computing SHA256 for $BIN ..."
 sha256sum "$BIN" > SHA256SUMS.txt
 cat SHA256SUMS.txt
@@ -36,4 +41,3 @@ CMD
 
 echo
 echo "A draft Release will be created by GitHub Actions with attached assets."
-
