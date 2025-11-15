@@ -63,7 +63,7 @@ WebServer server(80);
 DNSServer dnsServer; // for captive portal in AP mode
 const byte DNS_PORT = 53;
 IPAddress apIP(192, 168, 4, 1);
-static const char *FW_VER = "ver3.3.1";
+static const char *FW_VER = "ver3.3.2";
 static const char *OTA_USER = "admin";
 static const char *OTA_PASS = "fluke1234";
 
@@ -105,18 +105,18 @@ static const uint32_t PCT_VDELTA_HOLD_MS = 2000; // require voltage delta to per
 // dV/dt-based charging/full detection and UI behavior
 static const uint32_t DVDT_WIN_MS = 4000; // window for dV/dt estimate
 // Defaults for trend-based thresholds (overridable via /config)
-static const float DEF_CHG_ON_DVDT_MV_S = 0.8f;          // charging if slope >= +0.8 mV/s
-static const float DEF_CHG_OFF_DVDT_MV_S = 0.2f;         // stop charging if negative slope magnitude >= 0.2 mV/s
-static const uint32_t DEF_CHG_ON_HOLD_MS = 6000;         // require slope ON for 6 s
-static const uint32_t DEF_CHG_OFF_HOLD_MS = 8000;        // require slope OFF for 8 s
-static const float DEF_FULL_DVDT_MAX = 0.2f;             // mV/s, near-flat slope to call full
-static const uint32_t DEF_FULL_HOLD_MS = 20000;          // 20 s above VBAT_FULL with flat slope
-static const uint32_t DEF_CHG_FREEZE_MS = 15000;         // freeze percent for 15 s on charge start
-static const uint32_t DEF_CHG_PCT_RATE_MS = 30000;       // while charging: +1% at most every 30 s
-static const uint32_t DEF_DISCH_PCT_RATE_MS = 5000;      // while discharging: 1% per 5 s
-static const float DEF_CHG_ON_MIN_DV = 0.015f;           // require >=15 mV rise during ON hold
-static const float DEF_CHG_OFF_ZERO_DVDT = 0.05f;        // ~flat slope threshold (|dV/dt| <= 0.05 mV/s)
-static const uint32_t DEF_CHG_OFF_ZERO_HOLD_MS = 120000; // 120 s of ~flat to consider OFF
+static const float DEF_CHG_ON_DVDT_MV_S = 0.30f;        // charging if slope >= +0.30 mV/s (more permissive)
+static const float DEF_CHG_OFF_DVDT_MV_S = 0.15f;       // stop charging if negative slope magnitude >= 0.15 mV/s
+static const uint32_t DEF_CHG_ON_HOLD_MS = 4000;        // require slope ON for 4 s
+static const uint32_t DEF_CHG_OFF_HOLD_MS = 6000;       // require slope OFF for 6 s
+static const float DEF_FULL_DVDT_MAX = 0.2f;            // mV/s, near-flat slope to call full
+static const uint32_t DEF_FULL_HOLD_MS = 15000;         // 15 s near FULL with flat slope
+static const uint32_t DEF_CHG_FREEZE_MS = 15000;        // freeze percent for 15 s on charge start
+static const uint32_t DEF_CHG_PCT_RATE_MS = 30000;      // while charging: +1% at most every 30 s
+static const uint32_t DEF_DISCH_PCT_RATE_MS = 5000;     // while discharging: 1% per 5 s
+static const float DEF_CHG_ON_MIN_DV = 0.010f;          // require >=10 mV rise during ON hold
+static const float DEF_CHG_OFF_ZERO_DVDT = 0.03f;       // ~flat slope threshold (|dV/dt| <= 0.03 mV/s)
+static const uint32_t DEF_CHG_OFF_ZERO_HOLD_MS = 60000; // 60 s of ~flat to consider OFF
 
 // Runtime tuneable copies (loaded from NVS)
 float gCfgChgOnDvdt = DEF_CHG_ON_DVDT_MV_S;
@@ -154,6 +154,7 @@ bool gTrendFull = false;
 uint32_t gChgOnT0 = 0, gChgOffT0 = 0, gFullT0 = 0;
 uint32_t gChgFreezeUntil = 0;
 float gChgOnV0 = 0.0f;   // voltage at charge-ON candidate start
+float gChgMaxV = 0.0f;   // max VBAT seen since charge-ON candidate start
 uint32_t gChgZeroT0 = 0; // timer for near-zero slope OFF
 uint32_t ledTmr = 0;
 bool ledOn = false;
@@ -361,8 +362,9 @@ void updateBatteryFilter()
         gDvdtRefV = gVbatFilt;
     }
     bool wasCharging = gTrendCharging;
-    // FULL detection: high voltage and flat slope sustained
-    if (gVbatFilt >= VBAT_FULL && fabsf(gDvdtMVs) <= gCfgFullDvdtMax)
+    // FULL detection: use calibrated/normalized voltage near top and flat slope sustained
+    // Treat as FULL when normalized VBAT is within ~20 mV of SOC reference full and slope is near zero
+    if (socNormalizeVoltage(gVbatFilt) >= (SOC_VREF_FULL - 0.02f) && fabsf(gDvdtMVs) <= gCfgFullDvdtMax)
     {
         if (gFullT0 == 0)
             gFullT0 = now;
@@ -383,12 +385,16 @@ void updateBatteryFilter()
             {
                 gChgOnT0 = now;
                 gChgOnV0 = gVbatFilt;
+                gChgMaxV = gVbatFilt;
             }
             if (now - gChgOnT0 >= gCfgChgOnHoldMs)
             {
                 if ((gVbatFilt - gChgOnV0) >= gCfgChgOnMinDv)
                     gTrendCharging = true;
             }
+            // track the maximum VBAT during ON candidate / charging phase
+            if (gVbatFilt > gChgMaxV)
+                gChgMaxV = gVbatFilt;
         }
         else
         {
@@ -400,19 +406,34 @@ void updateBatteryFilter()
             if (gChgOffT0 == 0)
                 gChgOffT0 = now;
             if (now - gChgOffT0 >= gCfgChgOffHoldMs)
-                gTrendCharging = false;
+            {
+                // only drop CHARGING if we also lost a meaningful amount of voltage from recent max
+                if ((gChgMaxV - gVbatFilt) >= 0.020f)
+                    gTrendCharging = false;
+            }
         }
         else
         {
             gChgOffT0 = 0;
         }
-        // also consider OFF if slope remains ~zero for a long time (e.g., after unplug, rebound fades)
+        // also consider OFF if slope remains ~zero for a long time AND
+        // there was no meaningful net voltage gain since charge-ON candidate.
+        // This prevents falsely dropping out of CHARGING during CV plateau
+        // where slope is near zero but cell is still charging.
         if (fabsf(gDvdtMVs) <= gCfgChgOffZeroDvdt)
         {
-            if (gChgZeroT0 == 0)
-                gChgZeroT0 = now;
-            if (now - gChgZeroT0 >= gCfgChgOffZeroHoldMs)
-                gTrendCharging = false;
+            // require tiny net gain (<5 mV) since gChgOnV0 to allow zero-slope OFF
+            if ((gVbatFilt - gChgOnV0) < 0.005f)
+            {
+                if (gChgZeroT0 == 0)
+                    gChgZeroT0 = now;
+                if (now - gChgZeroT0 >= gCfgChgOffZeroHoldMs)
+                    gTrendCharging = false;
+            }
+            else
+            {
+                gChgZeroT0 = 0; // net gain present -> keep charging latched
+            }
         }
         else
         {
@@ -423,6 +444,7 @@ void updateBatteryFilter()
     {
         gTrendCharging = false;
         gChgOnT0 = gChgOffT0 = 0;
+        gChgMaxV = 0.0f;
     }
     if (!wasCharging && gTrendCharging)
     {
@@ -508,6 +530,10 @@ void updateBatteryFilter()
         uint32_t rateMs = gTrendCharging ? gCfgChgPctRateMs : gCfgDischPctRateMs;
         if (gTrendCharging && diff < 0)
             allowed = false; // don't go down while charging
+        // Strong guard: nie zwiększaj procentów, jeśli nie jesteśmy w CHARGING
+        // (zapobiega "lawinowemu" wzrostowi w stanie DISCHARGE podczas ładowania CV)
+        if (diff > 0 && !gTrendCharging)
+            allowed = false;
         if (allowed && (now - gPercentStepT0 >= rateMs))
         {
             int step = (diff > 0) ? PCT_RATE_STEP : -PCT_RATE_STEP;
@@ -1980,7 +2006,7 @@ void registerOtaRoutes()
         static const char PROGMEM page[] = R"HTML(
 <!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>FlukeBridge - OTA Update</title></head><body style="font-family:sans-serif;padding:16px">
-<h2>OTA Update (ver3.3.1)</h2>
+<h2>OTA Update (ver3.3.2)</h2>
 <form method="POST" action="/update" enctype="multipart/form-data">
   <input type="file" name="update" accept=".bin,application/octet-stream"><br><br>
   <button type="submit">Upload & Flash</button>

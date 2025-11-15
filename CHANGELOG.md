@@ -10,6 +10,11 @@ All notable changes to this project will be documented in this file.
 - ADC sampling: VBAT read averages 4 samples without per‑sample delays (snappier UI).
 - Firmware version bump to `ver3.3.1` (shown in UI/OTA).
 
+3.3.2 – Battery charge/full detection tuning
+- Trend-based charging detection thresholds relaxed: on >= +0.30 mV/s for 4 s (>=10 mV total), off on <= −0.15 mV/s for 6 s; near‑zero slope off after 60 s (<= 0.03 mV/s).
+- FULL detection now uses SoC calibration: considers full when normalized VBAT is within ~20 mV of reference full and slope is flat for 15 s.
+- Effect: charging state is recognized earlier i procent nie skacze szybko podczas ładowania (działa rate limiting dla CHARGE).
+
 3.3 – Filtered VBAT + deep sleep
 - Add exponential filter and hysteresis for battery voltage/LED.
 - Enter deep sleep after 15 s in CRIT to protect the cell.
