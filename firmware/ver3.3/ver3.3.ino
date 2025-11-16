@@ -63,7 +63,7 @@ WebServer server(80);
 DNSServer dnsServer; // for captive portal in AP mode
 const byte DNS_PORT = 53;
 IPAddress apIP(192, 168, 4, 1);
-static const char *FW_VER = "ver3.3.3";
+static const char *FW_VER = "ver3.3.4";
 static const char *OTA_USER = "admin";
 static const char *OTA_PASS = "fluke1234";
 
@@ -376,8 +376,10 @@ void updateBatteryFilter()
         gFullT0 = 0;
         gTrendFull = false;
     }
-    // CHARGING detection: positive slope sustained, and not full
-    if (!gTrendFull)
+    // CHARGING detection: positive slope sustained, and not full.
+    // Only allow CHARGING when USB is present (VBAT above USB_PRESENT_V).
+    bool usbNowForTrend = (gVbatFilt > USB_PRESENT_V);
+    if (!gTrendFull && usbNowForTrend)
     {
         if (gDvdtMVs >= gCfgChgOnDvdt)
         {
@@ -445,6 +447,7 @@ void updateBatteryFilter()
         gTrendCharging = false;
         gChgOnT0 = gChgOffT0 = 0;
         gChgMaxV = 0.0f;
+        gChgZeroT0 = 0;
     }
     if (!wasCharging && gTrendCharging)
     {
@@ -530,8 +533,8 @@ void updateBatteryFilter()
         uint32_t rateMs = gTrendCharging ? gCfgChgPctRateMs : gCfgDischPctRateMs;
         if (gTrendCharging && diff < 0)
             allowed = false; // don't go down while charging
-        // Strong guard: nie zwiększaj procentów, jeśli nie jesteśmy w CHARGING
-        // (zapobiega "lawinowemu" wzrostowi w stanie DISCHARGE podczas ładowania CV)
+        // Strong guard: do not increase percent when not in CHARGING
+        // (prevents unrealistic growth in DISCHARGE during CV-like behavior)
         if (diff > 0 && !gTrendCharging)
             allowed = false;
         if (allowed && (now - gPercentStepT0 >= rateMs))
@@ -2006,7 +2009,7 @@ void registerOtaRoutes()
         static const char PROGMEM page[] = R"HTML(
 <!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>FlukeBridge - OTA Update</title></head><body style="font-family:sans-serif;padding:16px">
-<h2>OTA Update (ver3.3.3)</h2>
+<h2>OTA Update (ver3.3.4)</h2>
 <form method="POST" action="/update" enctype="multipart/form-data">
   <input type="file" name="update" accept=".bin,application/octet-stream"><br><br>
   <button type="submit">Upload & Flash</button>

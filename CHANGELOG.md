@@ -3,6 +3,11 @@ Changelog
 
 All notable changes to this project will be documented in this file.
 
+3.3.4 – USB-gated charging trend
+- Charging trend (CHARGING state and percent rate limit) is now allowed only when USB is present (VBAT above USB_PRESENT_V).
+- When USB is absent, charging timers and trend are reset, preventing spurious CHARGING/DISCHARGE flips on small voltage drift.
+- Percent still cannot increase when not in CHARGING, removing unrealistic growth during pure discharge.
+
 3.3.3 – Per-version release notes (CI)
 - GitHub Actions: release body shows only the changes for the current version (extracted from CHANGELOG into RELEASE_NOTES.md).
 - Script: tools/release.sh checks if tag `v<VER>` already exists before creating it.
