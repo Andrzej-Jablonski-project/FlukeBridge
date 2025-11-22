@@ -1419,37 +1419,37 @@ pre{background:#0e1526;border:1px solid #1b2540;border-radius:10px;padding:12px;
 </div>
 <script>
 async function doSoc(action){
-  const r=await fetch('/api/soc?action='+encodeURIComponent(action));
+  const r=await fetch('/api/soc?action='+encodeURIComponent(action),{headers:{Authorization:auth}});
   document.getElementById('out').textContent=await r.text();}
 async function doVbat(action){
-  const r=await fetch('/api/vbat?action='+encodeURIComponent(action));
+  const r=await fetch('/api/vbat?action='+encodeURIComponent(action),{headers:{Authorization:auth}});
   document.getElementById('out').textContent=await r.text();}
 async function setDiv(){
   const r1=document.getElementById('r1').value||''; const r2=document.getElementById('r2').value||'';
-  const r=await fetch('/api/vbat?action=set_div&r1='+encodeURIComponent(r1)+'&r2='+encodeURIComponent(r2));
+  const r=await fetch('/api/vbat?action=set_div&r1='+encodeURIComponent(r1)+'&r2='+encodeURIComponent(r2),{headers:{Authorization:auth}});
   document.getElementById('out').textContent=await r.text();}
 async function setScale(){
   const k=document.getElementById('scale').value||'';
-  const r=await fetch('/api/vbat?action=set_scale&k='+encodeURIComponent(k));
+  const r=await fetch('/api/vbat?action=set_scale&k='+encodeURIComponent(k),{headers:{Authorization:auth}});
   document.getElementById('out').textContent=await r.text();}
 async function calVbat(){
   const v=document.getElementById('calv').value||'';
-  const r=await fetch('/api/vbat?action=calibrate&v='+encodeURIComponent(v));
+  const r=await fetch('/api/vbat?action=calibrate&v='+encodeURIComponent(v),{headers:{Authorization:auth}});
   document.getElementById('out').textContent=await r.text();}
 
 async function loadTune(){
-  const r=await fetch('/api/tune?action=get'); const j=await r.json();
+  const r=await fetch('/api/tune?action=get',{headers:{Authorization:auth}}); const j=await r.json();
   for(const k in j){ const el=document.getElementById(k); if(el){ el.value=j[k]; } }
   document.getElementById('out').textContent=JSON.stringify(j);
 }
 async function saveTune(){
   const ids=['on_dvdt','off_dvdt','on_hold','off_hold','full_hold','full_min_chg','freeze_ms','chg_rate','d_rate','on_mindv','zero_dvdt','zero_hold'];
   const qs=ids.map(id=> id+'='+encodeURIComponent(document.getElementById(id).value||'')).join('&');
-  const r=await fetch('/api/tune?action=set&'+qs);
+  const r=await fetch('/api/tune?action=set&'+qs,{headers:{Authorization:auth}});
   document.getElementById('out').textContent=await r.text();
 }
 async function resetTune(){
-  const r=await fetch('/api/tune?action=reset');
+  const r=await fetch('/api/tune?action=reset',{headers:{Authorization:auth}});
   const t=await r.text();
   document.getElementById('out').textContent=t;
   try{ await loadTune(); }catch(e){}
@@ -2007,6 +2007,7 @@ a{color:#9bd0ff;text-decoration:none} footer{text-align:center;opacity:.6;font-s
 <footer>Hold BOOT &gt; 3 s to clear Wi-Fi and reboot (AP: FlukeBridge-XXXX) • <a href="/status.json">status.json</a> • <a href="/config">Config</a> • <a href="/update">OTA</a></footer>
 </div>
 <script>
+const auth='Basic '+btoa('admin:fluke1234');
 async function tick(){
  try{
   const r=await fetch('/status.json',{cache:'no-store'});const j=await r.json();
