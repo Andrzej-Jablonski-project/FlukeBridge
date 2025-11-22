@@ -4,7 +4,7 @@ Changelog
 All notable changes to this project will be documented in this file.
 
 3.3.5 – Less eager FULL; require USB + charge time
-- FULL requires USB present, at least 5 minutes spent in CHARGING, flat slope, and normalized voltage near full; hold time increased to 30 s.
+- FULL requires USB present, at least 15 minutes spent in CHARGING, flat slope, and normalized voltage near full (±50 mV); hold time increased to 60 s.
 - Negative-slope exit from CHARGING removed (stays latched while USB is present) to avoid flicker on small sags during CV charging.
 - USB presence threshold lowered to 3.90 V for this hardware (charging detection works at ~4.0 V on cell).
 

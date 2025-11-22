@@ -110,8 +110,8 @@ static const float DEF_CHG_OFF_DVDT_MV_S = 0.15f;       // stop charging if nega
 static const uint32_t DEF_CHG_ON_HOLD_MS = 4000;        // require slope ON for 4 s
 static const uint32_t DEF_CHG_OFF_HOLD_MS = 6000;       // require slope OFF for 6 s
 static const float DEF_FULL_DVDT_MAX = 0.2f;            // mV/s, near-flat slope to call full
-static const uint32_t DEF_FULL_HOLD_MS = 30000;         // 30 s near FULL with flat slope
-static const uint32_t DEF_FULL_MIN_CHG_MS = 300000;     // require 5 min in CHARGING before FULL is possible
+static const uint32_t DEF_FULL_HOLD_MS = 60000;         // 60 s near FULL with flat slope
+static const uint32_t DEF_FULL_MIN_CHG_MS = 900000;     // require 15 min in CHARGING before FULL is possible
 static const uint32_t DEF_CHG_FREEZE_MS = 15000;        // freeze percent for 15 s on charge start
 static const uint32_t DEF_CHG_PCT_RATE_MS = 30000;      // while charging: +1% at most every 30 s
 static const uint32_t DEF_DISCH_PCT_RATE_MS = 5000;     // while discharging: 1% per 5 s
@@ -368,9 +368,10 @@ void updateBatteryFilter()
     bool wasCharging = gTrendCharging;
     // FULL detection: use calibrated/normalized voltage near top and flat slope sustained
     // Require USB present and minimum time in CHARGING before FULL can trigger.
-    // Treat as FULL when normalized VBAT is within ~20 mV of SOC reference full and slope is near zero
+    // Treat as FULL when normalized VBAT is within ~50 mV of SOC reference full and slope is near zero
+    float vnormForFull = socNormalizeVoltage(gVbatFilt);
     if (usbNowForTrend && gChgSessionT0 != 0 && (now - gChgSessionT0) >= gCfgFullMinChgMs &&
-        socNormalizeVoltage(gVbatFilt) >= (SOC_VREF_FULL - 0.02f) && fabsf(gDvdtMVs) <= gCfgFullDvdtMax)
+        vnormForFull >= (SOC_VREF_FULL - 0.05f) && fabsf(gDvdtMVs) <= gCfgFullDvdtMax)
     {
         if (gFullT0 == 0)
             gFullT0 = now;
@@ -1442,7 +1443,7 @@ async function loadTune(){
   document.getElementById('out').textContent=JSON.stringify(j);
 }
 async function saveTune(){
-  const ids=['on_dvdt','off_dvdt','on_hold','off_hold','full_hold','freeze_ms','chg_rate','d_rate','on_mindv','zero_dvdt','zero_hold'];
+  const ids=['on_dvdt','off_dvdt','on_hold','off_hold','full_hold','full_min_chg','freeze_ms','chg_rate','d_rate','on_mindv','zero_dvdt','zero_hold'];
   const qs=ids.map(id=> id+'='+encodeURIComponent(document.getElementById(id).value||'')).join('&');
   const r=await fetch('/api/tune?action=set&'+qs);
   document.getElementById('out').textContent=await r.text();
@@ -1572,6 +1573,7 @@ void handleApiTune()
         s += "\"on_hold\":" + String(gCfgChgOnHoldMs) + ",";
         s += "\"off_hold\":" + String(gCfgChgOffHoldMs) + ",";
         s += "\"full_hold\":" + String(gCfgFullHoldMs) + ",";
+        s += "\"full_min_chg\":" + String(gCfgFullMinChgMs) + ",";
         s += "\"freeze_ms\":" + String(gCfgChgFreezeMs) + ",";
         s += "\"chg_rate\":" + String(gCfgChgPctRateMs) + ",";
         s += "\"d_rate\":" + String(gCfgDischPctRateMs) + ",";
@@ -1610,6 +1612,11 @@ void handleApiTune()
         {
             gCfgFullHoldMs = server.arg("full_hold").toInt();
             tp.putUInt("full_hold", gCfgFullHoldMs);
+        }
+        if (server.hasArg("full_min_chg"))
+        {
+            gCfgFullMinChgMs = server.arg("full_min_chg").toInt();
+            tp.putUInt("full_min_chg", gCfgFullMinChgMs);
         }
         if (server.hasArg("freeze_ms"))
         {
@@ -1654,6 +1661,7 @@ void handleApiTune()
         gCfgChgOffHoldMs = DEF_CHG_OFF_HOLD_MS;
         gCfgFullDvdtMax = DEF_FULL_DVDT_MAX;
         gCfgFullHoldMs = DEF_FULL_HOLD_MS;
+        gCfgFullMinChgMs = DEF_FULL_MIN_CHG_MS;
         gCfgChgFreezeMs = DEF_CHG_FREEZE_MS;
         gCfgChgPctRateMs = DEF_CHG_PCT_RATE_MS;
         gCfgDischPctRateMs = DEF_DISCH_PCT_RATE_MS;
@@ -1669,6 +1677,7 @@ void handleApiTune()
         tp.putUInt("off_hold", gCfgChgOffHoldMs);
         tp.putFloat("full_dvdt", gCfgFullDvdtMax);
         tp.putUInt("full_hold", gCfgFullHoldMs);
+        tp.putUInt("full_min_chg", gCfgFullMinChgMs);
         tp.putUInt("freeze_ms", gCfgChgFreezeMs);
         tp.putUInt("chg_rate", gCfgChgPctRateMs);
         tp.putUInt("d_rate", gCfgDischPctRateMs);
@@ -2089,6 +2098,7 @@ void setup()
         gCfgChgOffHoldMs = tp.getUInt("off_hold", DEF_CHG_OFF_HOLD_MS);
         gCfgFullDvdtMax = tp.getFloat("full_dvdt", DEF_FULL_DVDT_MAX);
         gCfgFullHoldMs = tp.getUInt("full_hold", DEF_FULL_HOLD_MS);
+        gCfgFullMinChgMs = tp.getUInt("full_min_chg", DEF_FULL_MIN_CHG_MS);
         gCfgChgFreezeMs = tp.getUInt("freeze_ms", DEF_CHG_FREEZE_MS);
         gCfgChgPctRateMs = tp.getUInt("chg_rate", DEF_CHG_PCT_RATE_MS);
         gCfgDischPctRateMs = tp.getUInt("d_rate", DEF_DISCH_PCT_RATE_MS);
