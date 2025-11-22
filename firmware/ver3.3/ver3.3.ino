@@ -82,6 +82,7 @@ static const float R1_DEFAULT = R1_VBAT;
 static const float R2_DEFAULT = R2_VBAT;
 static const float ADC_VREF = 3.3f;
 static const float USB_PRESENT_V = 3.90f; // heuristic USB present (tuned for typical Li-ion charge around 4.0+ V)
+static const float USB_PRESENT_HYST = 0.12f; // hysteresis for USB presence (set at +0.12 V, clear at -0.12 V)
 static const float VBAT_FULL = 4.15f;
 static const float VBAT_NOBAT = 1.00f;
 // Hysteresis thresholds (filtered voltage)
@@ -161,6 +162,7 @@ uint32_t gChgZeroT0 = 0;    // timer for near-zero slope OFF
 uint32_t gChgSessionT0 = 0; // when CHARGING latched during this session
 uint32_t ledTmr = 0;
 bool ledOn = false;
+bool usbPresentLatched = false;
 
 // ---------------- BOOT long-press ----------
 uint32_t bootT0 = 0;
@@ -364,7 +366,18 @@ void updateBatteryFilter()
         gDvdtRefT = now;
         gDvdtRefV = gVbatFilt;
     }
-    bool usbNowForTrend = (gVbatFilt > USB_PRESENT_V);
+    // USB presence with hysteresis to avoid false positives on high VBAT after unplug
+    if (!usbPresentLatched)
+    {
+        if (gVbatFilt > (USB_PRESENT_V + USB_PRESENT_HYST))
+            usbPresentLatched = true;
+    }
+    else
+    {
+        if (gVbatFilt < (USB_PRESENT_V - USB_PRESENT_HYST))
+            usbPresentLatched = false;
+    }
+    bool usbNowForTrend = usbPresentLatched;
     bool wasCharging = gTrendCharging;
     // FULL detection: use calibrated/normalized voltage near top and flat slope sustained
     // Require USB present and minimum time in CHARGING before FULL can trigger.
@@ -564,7 +577,7 @@ void batteryLedTask()
     updateBatteryFilter();
     float vb = gVbatFilt;
 
-    usbPresent = (vb > USB_PRESENT_V); // USB heuristic
+    usbPresent = usbPresentLatched; // heuristics with hysteresis computed in updateBatteryFilter
     battNoBatt = (vb < VBAT_NOBAT);
     // Use trend-based full/charging states computed in updateBatteryFilter
     battFull = (!battNoBatt && gTrendFull);
