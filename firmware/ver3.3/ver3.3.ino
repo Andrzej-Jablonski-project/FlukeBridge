@@ -1419,6 +1419,7 @@ pre{background:#0e1526;border:1px solid #1b2540;border-radius:10px;padding:12px;
 <p><a href="/">Home</a> • <a href="/status.html">Dashboard</a> • <a href="/update">OTA</a></p>
 </div>
 <script>
+const auth='Basic '+btoa('admin:fluke1234');
 async function doSoc(action){
   const r=await fetch('/api/soc?action='+encodeURIComponent(action),{headers:{Authorization:auth}});
   document.getElementById('out').textContent=await r.text();}
