@@ -1610,28 +1610,48 @@ void handleApiTune()
         }
         if (server.hasArg("full_hold"))
         {
-            gCfgFullHoldMs = server.arg("full_hold").toInt();
-            tp.putUInt("full_hold", gCfgFullHoldMs);
+            uint32_t v = server.arg("full_hold").toInt();
+            if (v > 0)
+            {
+                gCfgFullHoldMs = v;
+                tp.putUInt("full_hold", gCfgFullHoldMs);
+            }
         }
         if (server.hasArg("full_min_chg"))
         {
-            gCfgFullMinChgMs = server.arg("full_min_chg").toInt();
-            tp.putUInt("full_min_chg", gCfgFullMinChgMs);
+            uint32_t v = server.arg("full_min_chg").toInt();
+            if (v > 0)
+            {
+                gCfgFullMinChgMs = v;
+                tp.putUInt("full_min_chg", gCfgFullMinChgMs);
+            }
         }
         if (server.hasArg("freeze_ms"))
         {
-            gCfgChgFreezeMs = server.arg("freeze_ms").toInt();
-            tp.putUInt("freeze_ms", gCfgChgFreezeMs);
+            uint32_t v = server.arg("freeze_ms").toInt();
+            if (v > 0)
+            {
+                gCfgChgFreezeMs = v;
+                tp.putUInt("freeze_ms", gCfgChgFreezeMs);
+            }
         }
         if (server.hasArg("chg_rate"))
         {
-            gCfgChgPctRateMs = server.arg("chg_rate").toInt();
-            tp.putUInt("chg_rate", gCfgChgPctRateMs);
+            uint32_t v = server.arg("chg_rate").toInt();
+            if (v > 0)
+            {
+                gCfgChgPctRateMs = v;
+                tp.putUInt("chg_rate", gCfgChgPctRateMs);
+            }
         }
         if (server.hasArg("d_rate"))
         {
-            gCfgDischPctRateMs = server.arg("d_rate").toInt();
-            tp.putUInt("d_rate", gCfgDischPctRateMs);
+            uint32_t v = server.arg("d_rate").toInt();
+            if (v > 0)
+            {
+                gCfgDischPctRateMs = v;
+                tp.putUInt("d_rate", gCfgDischPctRateMs);
+            }
         }
         if (server.hasArg("on_mindv"))
         {
