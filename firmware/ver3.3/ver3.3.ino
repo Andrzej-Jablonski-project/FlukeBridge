@@ -155,9 +155,9 @@ bool gTrendCharging = false;
 bool gTrendFull = false;
 uint32_t gChgOnT0 = 0, gChgOffT0 = 0, gFullT0 = 0;
 uint32_t gChgFreezeUntil = 0;
-float gChgOnV0 = 0.0f;   // voltage at charge-ON candidate start
-float gChgMaxV = 0.0f;   // max VBAT seen since charge-ON candidate start
-uint32_t gChgZeroT0 = 0; // timer for near-zero slope OFF
+float gChgOnV0 = 0.0f;      // voltage at charge-ON candidate start
+float gChgMaxV = 0.0f;      // max VBAT seen since charge-ON candidate start
+uint32_t gChgZeroT0 = 0;    // timer for near-zero slope OFF
 uint32_t gChgSessionT0 = 0; // when CHARGING latched during this session
 uint32_t ledTmr = 0;
 bool ledOn = false;
@@ -384,7 +384,6 @@ void updateBatteryFilter()
     }
     // CHARGING detection: positive slope sustained, and not full.
     // Only allow CHARGING when USB is present (VBAT above USB_PRESENT_V).
-    bool usbNowForTrend = (gVbatFilt > USB_PRESENT_V);
     if (!gTrendFull && usbNowForTrend)
     {
         if (gDvdtMVs >= gCfgChgOnDvdt)
