@@ -63,7 +63,7 @@ WebServer server(80);
 DNSServer dnsServer; // for captive portal in AP mode
 const byte DNS_PORT = 53;
 IPAddress apIP(192, 168, 4, 1);
-static const char *FW_VER = "ver3.3.4";
+static const char *FW_VER = "ver3.3.5";
 static const char *OTA_USER = "admin";
 static const char *OTA_PASS = "fluke1234";
 
@@ -81,7 +81,7 @@ static const float R2_VBAT = 470000.0f; // legacy default (ohms)
 static const float R1_DEFAULT = R1_VBAT;
 static const float R2_DEFAULT = R2_VBAT;
 static const float ADC_VREF = 3.3f;
-static const float USB_PRESENT_V = 4.60f; // heuristic USB present
+static const float USB_PRESENT_V = 3.90f; // heuristic USB present (tuned for typical Li-ion charge around 4.0+ V)
 static const float VBAT_FULL = 4.15f;
 static const float VBAT_NOBAT = 1.00f;
 // Hysteresis thresholds (filtered voltage)
@@ -110,7 +110,8 @@ static const float DEF_CHG_OFF_DVDT_MV_S = 0.15f;       // stop charging if nega
 static const uint32_t DEF_CHG_ON_HOLD_MS = 4000;        // require slope ON for 4 s
 static const uint32_t DEF_CHG_OFF_HOLD_MS = 6000;       // require slope OFF for 6 s
 static const float DEF_FULL_DVDT_MAX = 0.2f;            // mV/s, near-flat slope to call full
-static const uint32_t DEF_FULL_HOLD_MS = 15000;         // 15 s near FULL with flat slope
+static const uint32_t DEF_FULL_HOLD_MS = 30000;         // 30 s near FULL with flat slope
+static const uint32_t DEF_FULL_MIN_CHG_MS = 300000;     // require 5 min in CHARGING before FULL is possible
 static const uint32_t DEF_CHG_FREEZE_MS = 15000;        // freeze percent for 15 s on charge start
 static const uint32_t DEF_CHG_PCT_RATE_MS = 30000;      // while charging: +1% at most every 30 s
 static const uint32_t DEF_DISCH_PCT_RATE_MS = 5000;     // while discharging: 1% per 5 s
@@ -125,6 +126,7 @@ uint32_t gCfgChgOnHoldMs = DEF_CHG_ON_HOLD_MS;
 uint32_t gCfgChgOffHoldMs = DEF_CHG_OFF_HOLD_MS;
 float gCfgFullDvdtMax = DEF_FULL_DVDT_MAX;
 uint32_t gCfgFullHoldMs = DEF_FULL_HOLD_MS;
+uint32_t gCfgFullMinChgMs = DEF_FULL_MIN_CHG_MS;
 uint32_t gCfgChgFreezeMs = DEF_CHG_FREEZE_MS;
 uint32_t gCfgChgPctRateMs = DEF_CHG_PCT_RATE_MS;
 uint32_t gCfgDischPctRateMs = DEF_DISCH_PCT_RATE_MS;
@@ -156,6 +158,7 @@ uint32_t gChgFreezeUntil = 0;
 float gChgOnV0 = 0.0f;   // voltage at charge-ON candidate start
 float gChgMaxV = 0.0f;   // max VBAT seen since charge-ON candidate start
 uint32_t gChgZeroT0 = 0; // timer for near-zero slope OFF
+uint32_t gChgSessionT0 = 0; // when CHARGING latched during this session
 uint32_t ledTmr = 0;
 bool ledOn = false;
 
@@ -361,10 +364,13 @@ void updateBatteryFilter()
         gDvdtRefT = now;
         gDvdtRefV = gVbatFilt;
     }
+    bool usbNowForTrend = (gVbatFilt > USB_PRESENT_V);
     bool wasCharging = gTrendCharging;
     // FULL detection: use calibrated/normalized voltage near top and flat slope sustained
+    // Require USB present and minimum time in CHARGING before FULL can trigger.
     // Treat as FULL when normalized VBAT is within ~20 mV of SOC reference full and slope is near zero
-    if (socNormalizeVoltage(gVbatFilt) >= (SOC_VREF_FULL - 0.02f) && fabsf(gDvdtMVs) <= gCfgFullDvdtMax)
+    if (usbNowForTrend && gChgSessionT0 != 0 && (now - gChgSessionT0) >= gCfgFullMinChgMs &&
+        socNormalizeVoltage(gVbatFilt) >= (SOC_VREF_FULL - 0.02f) && fabsf(gDvdtMVs) <= gCfgFullDvdtMax)
     {
         if (gFullT0 == 0)
             gFullT0 = now;
@@ -402,22 +408,10 @@ void updateBatteryFilter()
         {
             gChgOnT0 = 0;
         }
-        // consider charging OFF on sustained negative slope
-        if (gDvdtMVs <= -gCfgChgOffDvdt)
-        {
-            if (gChgOffT0 == 0)
-                gChgOffT0 = now;
-            if (now - gChgOffT0 >= gCfgChgOffHoldMs)
-            {
-                // only drop CHARGING if we also lost a meaningful amount of voltage from recent max
-                if ((gChgMaxV - gVbatFilt) >= 0.020f)
-                    gTrendCharging = false;
-            }
-        }
-        else
-        {
-            gChgOffT0 = 0;
-        }
+        // NOTE: negative-slope based CHARGING exit was removed for this
+        // hardware revision; CHARGING now turns off when USB is no longer
+        // present or when FULL is reached. This avoids spurious exits on
+        // small voltage sags during constant-voltage charging.
         // also consider OFF if slope remains ~zero for a long time AND
         // there was no meaningful net voltage gain since charge-ON candidate.
         // This prevents falsely dropping out of CHARGING during CV plateau
@@ -452,7 +446,10 @@ void updateBatteryFilter()
     if (!wasCharging && gTrendCharging)
     {
         gChgFreezeUntil = now + gCfgChgFreezeMs;
+        gChgSessionT0 = now;
     }
+    if (!gTrendCharging)
+        gChgSessionT0 = 0;
 
     // Update stabilized percentage with hysteresis and hold time
     float vForPct = socNormalizeVoltage(gVbatFilt);
@@ -2009,7 +2006,7 @@ void registerOtaRoutes()
         static const char PROGMEM page[] = R"HTML(
 <!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>FlukeBridge - OTA Update</title></head><body style="font-family:sans-serif;padding:16px">
-<h2>OTA Update (ver3.3.4)</h2>
+<h2>OTA Update (ver3.3.5)</h2>
 <form method="POST" action="/update" enctype="multipart/form-data">
   <input type="file" name="update" accept=".bin,application/octet-stream"><br><br>
   <button type="submit">Upload & Flash</button>

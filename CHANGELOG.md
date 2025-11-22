@@ -3,6 +3,11 @@ Changelog
 
 All notable changes to this project will be documented in this file.
 
+3.3.5 – Less eager FULL; require USB + charge time
+- FULL requires USB present, at least 5 minutes spent in CHARGING, flat slope, and normalized voltage near full; hold time increased to 30 s.
+- Negative-slope exit from CHARGING removed (stays latched while USB is present) to avoid flicker on small sags during CV charging.
+- USB presence threshold lowered to 3.90 V for this hardware (charging detection works at ~4.0 V on cell).
+
 3.3.4 – USB-gated charging trend
 - Charging trend (CHARGING state and percent rate limit) is now allowed only when USB is present (VBAT above USB_PRESENT_V).
 - When USB is absent, charging timers and trend are reset, preventing spurious CHARGING/DISCHARGE flips on small voltage drift.
