@@ -1393,6 +1393,7 @@ pre{background:#0e1526;border:1px solid #1b2540;border-radius:10px;padding:12px;
   <div><label>zero_dvdt (mV/s)</label><input id="zero_dvdt" placeholder="0.05"><small>|dV/dt| considered ~flat</small></div>
   <div><label>zero_hold (ms)</label><input id="zero_hold" placeholder="120000"><small>Flat slope duration to exit CHARGING</small></div>
   <div><label>full_hold (ms)</label><input id="full_hold" placeholder="20000"><small>Time near VBAT_FULL with flat slope to mark FULL</small></div>
+  <div><label>full_min_chg (ms)</label><input id="full_min_chg" placeholder="900000"><small>Minimum time in CHARGING before FULL can trigger</small></div>
   <div><label>freeze_ms</label><input id="freeze_ms" placeholder="15000"><small>Freeze percent after CHARGING start</small></div>
   <div><label>chg_rate (ms)</label><input id="chg_rate" placeholder="30000"><small>Charging: max +1% every N ms</small></div>
   <div><label>d_rate (ms)</label><input id="d_rate" placeholder="5000"><small>Discharge: ±1% every N ms</small></div>
