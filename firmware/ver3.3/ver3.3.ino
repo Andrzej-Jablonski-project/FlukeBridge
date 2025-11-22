@@ -81,7 +81,7 @@ static const float R2_VBAT = 470000.0f; // legacy default (ohms)
 static const float R1_DEFAULT = R1_VBAT;
 static const float R2_DEFAULT = R2_VBAT;
 static const float ADC_VREF = 3.3f;
-static const float USB_PRESENT_V = 3.90f; // heuristic USB present (tuned for typical Li-ion charge around 4.0+ V)
+static const float USB_PRESENT_V = 3.90f;    // heuristic USB present (tuned for typical Li-ion charge around 4.0+ V)
 static const float USB_PRESENT_HYST = 0.12f; // hysteresis for USB presence (set at +0.12 V, clear at -0.12 V)
 static const float VBAT_FULL = 4.15f;
 static const float VBAT_NOBAT = 1.00f;
@@ -160,6 +160,7 @@ float gChgOnV0 = 0.0f;      // voltage at charge-ON candidate start
 float gChgMaxV = 0.0f;      // max VBAT seen since charge-ON candidate start
 uint32_t gChgZeroT0 = 0;    // timer for near-zero slope OFF
 uint32_t gChgSessionT0 = 0; // when CHARGING latched during this session
+uint32_t gUsbDropT0 = 0;    // timer for USB-present drop based on falling VBAT
 uint32_t ledTmr = 0;
 bool ledOn = false;
 bool usbPresentLatched = false;
@@ -375,7 +376,34 @@ void updateBatteryFilter()
     else
     {
         if (gVbatFilt < (USB_PRESENT_V - USB_PRESENT_HYST))
+        {
             usbPresentLatched = false;
+            gUsbDropT0 = 0;
+            gTrendCharging = false;
+            gChgSessionT0 = 0;
+            gChgOnT0 = gChgOffT0 = 0;
+            gChgMaxV = 0.0f;
+            gChgZeroT0 = 0;
+        }
+        else if (gDvdtMVs <= -0.02f && gVbatFilt < (USB_PRESENT_V + 0.20f))
+        {
+            // Sustained small negative slope with VBAT near threshold -> likely unplugged
+            if (gUsbDropT0 == 0)
+                gUsbDropT0 = now;
+            if (now - gUsbDropT0 >= 8000)
+            {
+                usbPresentLatched = false;
+                gTrendCharging = false;
+                gChgSessionT0 = 0;
+                gChgOnT0 = gChgOffT0 = 0;
+                gChgMaxV = 0.0f;
+                gChgZeroT0 = 0;
+            }
+        }
+        else
+        {
+            gUsbDropT0 = 0;
+        }
     }
     bool usbNowForTrend = usbPresentLatched;
     bool wasCharging = gTrendCharging;
@@ -1433,42 +1461,75 @@ pre{background:#0e1526;border:1px solid #1b2540;border-radius:10px;padding:12px;
 </div>
 <script>
 const auth='Basic '+btoa('admin:fluke1234');
+const outEl=document.getElementById('out');
+const fetchOpts={headers:{Authorization:auth,'Cache-Control':'no-cache','Pragma':'no-cache'}};
+const setOut=(txt)=>{ if(outEl) outEl.textContent=txt; };
 async function doSoc(action){
-  const r=await fetch('/api/soc?action='+encodeURIComponent(action),{headers:{Authorization:auth}});
-  document.getElementById('out').textContent=await r.text();}
+  try{
+    setOut('...');
+    const r=await fetch('/api/soc?action='+encodeURIComponent(action),fetchOpts);
+    setOut(await r.text());
+  }catch(e){ setOut('ERR '+e); }
+}
 async function doVbat(action){
-  const r=await fetch('/api/vbat?action='+encodeURIComponent(action),{headers:{Authorization:auth}});
-  document.getElementById('out').textContent=await r.text();}
+  try{
+    setOut('...');
+    const r=await fetch('/api/vbat?action='+encodeURIComponent(action),fetchOpts);
+    setOut(await r.text());
+  }catch(e){ setOut('ERR '+e); }
+}
 async function setDiv(){
   const r1=document.getElementById('r1').value||''; const r2=document.getElementById('r2').value||'';
-  const r=await fetch('/api/vbat?action=set_div&r1='+encodeURIComponent(r1)+'&r2='+encodeURIComponent(r2),{headers:{Authorization:auth}});
-  document.getElementById('out').textContent=await r.text();}
+  try{
+    setOut('...');
+    const r=await fetch('/api/vbat?action=set_div&r1='+encodeURIComponent(r1)+'&r2='+encodeURIComponent(r2),fetchOpts);
+    setOut(await r.text());
+  }catch(e){ setOut('ERR '+e); }
+}
 async function setScale(){
   const k=document.getElementById('scale').value||'';
-  const r=await fetch('/api/vbat?action=set_scale&k='+encodeURIComponent(k),{headers:{Authorization:auth}});
-  document.getElementById('out').textContent=await r.text();}
+  try{
+    setOut('...');
+    const r=await fetch('/api/vbat?action=set_scale&k='+encodeURIComponent(k),fetchOpts);
+    setOut(await r.text());
+  }catch(e){ setOut('ERR '+e); }
+}
 async function calVbat(){
   const v=document.getElementById('calv').value||'';
-  const r=await fetch('/api/vbat?action=calibrate&v='+encodeURIComponent(v),{headers:{Authorization:auth}});
-  document.getElementById('out').textContent=await r.text();}
+  try{
+    setOut('...');
+    const r=await fetch('/api/vbat?action=calibrate&v='+encodeURIComponent(v),fetchOpts);
+    setOut(await r.text());
+  }catch(e){ setOut('ERR '+e); }
+}
 
 async function loadTune(){
-  const r=await fetch('/api/tune?action=get',{headers:{Authorization:auth}}); const j=await r.json();
-  for(const k in j){ const el=document.getElementById(k); if(el){ el.value=j[k]; } }
-  document.getElementById('out').textContent=JSON.stringify(j);
+  try{
+    setOut('...');
+    const r=await fetch('/api/tune?action=get',fetchOpts); const j=await r.json();
+    for(const k in j){ const el=document.getElementById(k); if(el){ el.value=j[k]; } }
+    setOut(JSON.stringify(j));
+  }catch(e){ setOut('ERR '+e); }
 }
 async function saveTune(){
   const ids=['on_dvdt','off_dvdt','on_hold','off_hold','full_hold','full_min_chg','freeze_ms','chg_rate','d_rate','on_mindv','zero_dvdt','zero_hold'];
   const qs=ids.map(id=> id+'='+encodeURIComponent(document.getElementById(id).value||'')).join('&');
-  const r=await fetch('/api/tune?action=set&'+qs,{headers:{Authorization:auth}});
-  document.getElementById('out').textContent=await r.text();
+  try{
+    setOut('...');
+    const r=await fetch('/api/tune?action=set&'+qs,fetchOpts);
+    setOut(await r.text());
+  }catch(e){ setOut('ERR '+e); }
 }
 async function resetTune(){
-  const r=await fetch('/api/tune?action=reset',{headers:{Authorization:auth}});
-  const t=await r.text();
-  document.getElementById('out').textContent=t;
-  try{ await loadTune(); }catch(e){}
+  try{
+    setOut('...');
+    const r=await fetch('/api/tune?action=reset',fetchOpts);
+    const t=await r.text();
+    setOut(t);
+    try{ await loadTune(); }catch(e){}
+  }catch(e){ setOut('ERR '+e); }
 }
+window.addEventListener('load', ()=>{ try{ loadTune(); doSoc('status'); doVbat('query'); }catch(e){ setOut('ERR init '+e); } });
 </script></body></html>
 )HTML";
     server.send_P(200, "text/html; charset=utf-8", page);
