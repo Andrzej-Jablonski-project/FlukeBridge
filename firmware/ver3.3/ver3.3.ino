@@ -1600,57 +1600,100 @@ void handleApiTune()
         }
         if (server.hasArg("on_hold"))
         {
-            gCfgChgOnHoldMs = server.arg("on_hold").toInt();
-            tp.putUInt("on_hold", gCfgChgOnHoldMs);
+            String s = server.arg("on_hold");
+            s.trim();
+            if (s.length())
+            {
+                uint32_t v = (uint32_t)strtoul(s.c_str(), nullptr, 10);
+                if (v > 0)
+                {
+                    gCfgChgOnHoldMs = v;
+                    tp.putUInt("on_hold", gCfgChgOnHoldMs);
+                }
+            }
         }
         if (server.hasArg("off_hold"))
         {
-            gCfgChgOffHoldMs = server.arg("off_hold").toInt();
-            tp.putUInt("off_hold", gCfgChgOffHoldMs);
+            String s = server.arg("off_hold");
+            s.trim();
+            if (s.length())
+            {
+                uint32_t v = (uint32_t)strtoul(s.c_str(), nullptr, 10);
+                if (v > 0)
+                {
+                    gCfgChgOffHoldMs = v;
+                    tp.putUInt("off_hold", gCfgChgOffHoldMs);
+                }
+            }
         }
         if (server.hasArg("full_hold"))
         {
-            uint32_t v = server.arg("full_hold").toInt();
-            if (v > 0)
+            String s = server.arg("full_hold");
+            s.trim();
+            if (s.length())
             {
-                gCfgFullHoldMs = v;
-                tp.putUInt("full_hold", gCfgFullHoldMs);
+                uint32_t v = (uint32_t)strtoul(s.c_str(), nullptr, 10);
+                if (v > 0)
+                {
+                    gCfgFullHoldMs = v;
+                    tp.putUInt("full_hold", gCfgFullHoldMs);
+                }
             }
         }
         if (server.hasArg("full_min_chg"))
         {
-            uint32_t v = server.arg("full_min_chg").toInt();
-            if (v > 0)
+            String s = server.arg("full_min_chg");
+            s.trim();
+            if (s.length())
             {
-                gCfgFullMinChgMs = v;
-                tp.putUInt("full_min_chg", gCfgFullMinChgMs);
+                uint32_t v = (uint32_t)strtoul(s.c_str(), nullptr, 10);
+                if (v > 0)
+                {
+                    gCfgFullMinChgMs = v;
+                    tp.putUInt("full_min_chg", gCfgFullMinChgMs);
+                }
             }
         }
         if (server.hasArg("freeze_ms"))
         {
-            uint32_t v = server.arg("freeze_ms").toInt();
-            if (v > 0)
+            String s = server.arg("freeze_ms");
+            s.trim();
+            if (s.length())
             {
-                gCfgChgFreezeMs = v;
-                tp.putUInt("freeze_ms", gCfgChgFreezeMs);
+                uint32_t v = (uint32_t)strtoul(s.c_str(), nullptr, 10);
+                if (v > 0)
+                {
+                    gCfgChgFreezeMs = v;
+                    tp.putUInt("freeze_ms", gCfgChgFreezeMs);
+                }
             }
         }
         if (server.hasArg("chg_rate"))
         {
-            uint32_t v = server.arg("chg_rate").toInt();
-            if (v > 0)
+            String s = server.arg("chg_rate");
+            s.trim();
+            if (s.length())
             {
-                gCfgChgPctRateMs = v;
-                tp.putUInt("chg_rate", gCfgChgPctRateMs);
+                uint32_t v = (uint32_t)strtoul(s.c_str(), nullptr, 10);
+                if (v > 0)
+                {
+                    gCfgChgPctRateMs = v;
+                    tp.putUInt("chg_rate", gCfgChgPctRateMs);
+                }
             }
         }
         if (server.hasArg("d_rate"))
         {
-            uint32_t v = server.arg("d_rate").toInt();
-            if (v > 0)
+            String s = server.arg("d_rate");
+            s.trim();
+            if (s.length())
             {
-                gCfgDischPctRateMs = v;
-                tp.putUInt("d_rate", gCfgDischPctRateMs);
+                uint32_t v = (uint32_t)strtoul(s.c_str(), nullptr, 10);
+                if (v > 0)
+                {
+                    gCfgDischPctRateMs = v;
+                    tp.putUInt("d_rate", gCfgDischPctRateMs);
+                }
             }
         }
         if (server.hasArg("on_mindv"))
