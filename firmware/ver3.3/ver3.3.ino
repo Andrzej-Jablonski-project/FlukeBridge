@@ -371,42 +371,31 @@ void updateBatteryFilter()
         gDvdtRefT = now;
         gDvdtRefV = gVbatFilt;
     }
-    // USB presence with dual criteria: fast latch on high VBAT, slow latch on rising trend,
-    // and conservative drop requiring sustained fall or big delta.
+    // USB presence: latch only on sustained rise; unlatch on sustained fall/drop.
     bool usbPrev = usbPresentLatched;
-    const float usbOnHard = USB_PRESENT_V + USB_PRESENT_HYST;  // ~4.02 V
-    const float usbOffHard = USB_PRESENT_V - USB_PRESENT_HYST; // ~3.78 V
-    const float usbRiseSlope = 0.30f;                          // mV/s to consider "rising"
-    const float usbDropSlope = -0.02f;                         // mV/s to consider "falling"
-    const uint32_t usbRiseHoldMs = 5000;
-    const uint32_t usbDropHoldMs = 5000;
-    const float usbDropDelta = 0.03f; // 30 mV drop from latch to allow unlatch near threshold
+    const float usbRiseSlope = 0.35f; // mV/s to consider "rising" (aggressive)
+    const float usbDropSlope = -0.05f;
+    const uint32_t usbRiseHoldMs = 4000;
+    const uint32_t usbDropHoldMs = 4000;
+    const float usbRiseDelta = 0.05f; // +50 mV during rise window
+    const float usbDropDelta = 0.05f; // -50 mV from latch to allow unlatch
 
     if (!usbPresentLatched)
     {
-        if (gVbatFilt >= usbOnHard)
-        {
-            usbPresentLatched = true;
-            gUsbRiseT0 = 0;
-            gUsbPresentT0 = now;
-            gUsbLatchV = gVbatFilt;
-        }
-        else if (gVbatFilt >= (USB_PRESENT_V - 0.02f) && gDvdtMVs >= usbRiseSlope)
+        if (gVbatFilt >= 3.85f && gDvdtMVs >= usbRiseSlope)
         {
             if (gUsbRiseT0 == 0)
             {
                 gUsbRiseT0 = now;
                 gUsbRiseV0 = gVbatFilt;
             }
-            if (now - gUsbRiseT0 >= usbRiseHoldMs)
+            if ((now - gUsbRiseT0) >= usbRiseHoldMs && (gVbatFilt - gUsbRiseV0) >= usbRiseDelta)
             {
-                if ((gVbatFilt - gUsbRiseV0) >= 0.04f && gVbatFilt >= 3.95f)
-                {
-                    usbPresentLatched = true;
-                    gUsbPresentT0 = now;
-                    gUsbLatchV = gVbatFilt;
-                }
+                usbPresentLatched = true;
+                gUsbPresentT0 = now;
+                gUsbLatchV = gVbatFilt;
                 gUsbRiseT0 = 0;
+                gUsbRiseV0 = 0.0f;
             }
         }
         else
@@ -417,23 +406,24 @@ void updateBatteryFilter()
     }
     else
     {
-        bool offHard = (gVbatFilt <= usbOffHard);
-        bool offDrop = (gVbatFilt <= (gUsbLatchV - usbDropDelta) && gDvdtMVs <= usbDropSlope);
-        bool offFast = (gDvdtMVs <= -0.25f); // rapid fall -> unplug
-        if (offHard)
-        {
-            usbPresentLatched = false;
-        }
-        else if (offDrop || offFast)
+        bool allowDrop = ((gUsbLatchV - gVbatFilt) >= usbDropDelta) || (gDvdtMVs <= usbDropSlope);
+        if (allowDrop)
         {
             if (gUsbDropT0 == 0)
                 gUsbDropT0 = now;
-            if (now - gUsbDropT0 >= usbDropHoldMs)
+            if ((now - gUsbDropT0) >= usbDropHoldMs)
                 usbPresentLatched = false;
         }
         else
         {
             gUsbDropT0 = 0;
+        }
+
+        // Long flat near latch voltage → unlatch (no cable if brak netto zysku)
+        if (usbPresentLatched && gUsbPresentT0 != 0 && (now - gUsbPresentT0) >= 60000 &&
+            (gUsbLatchV - gVbatFilt) >= 0.02f && fabsf(gDvdtMVs) < 0.02f)
+        {
+            usbPresentLatched = false;
         }
 
         if (!usbPresentLatched)
@@ -461,36 +451,6 @@ void updateBatteryFilter()
         gUsbPresentT0 = 0;
         gUsbLatchV = 0.0f;
         gUsbRiseV0 = 0.0f;
-    }
-
-    // Safety: if USB is latched but VBAT stays <4.0 V and slope is near zero for long -> unlatch
-    if (usbPresentLatched && gUsbPresentT0 != 0 && (now - gUsbPresentT0) >= 60000 &&
-        gVbatFilt < 4.0f && fabsf(gDvdtMVs) < 0.02f)
-    {
-        usbPresentLatched = false;
-        gUsbPresentT0 = 0;
-        gUsbLatchV = 0.0f;
-        gUsbRiseV0 = 0.0f;
-        gTrendCharging = false;
-        gChgSessionT0 = 0;
-        gChgOnT0 = gChgOffT0 = 0;
-        gChgMaxV = 0.0f;
-        gChgZeroT0 = 0;
-    }
-
-    // Safety 2: if USB is latched but VBAT has fallen ≥60 mV from latch and slope is non-positive for 20 s -> unlatch
-    if (usbPresentLatched && gUsbPresentT0 != 0 && (now - gUsbPresentT0) >= 20000 &&
-        (gUsbLatchV - gVbatFilt) >= 0.06f && gDvdtMVs <= 0.0f)
-    {
-        usbPresentLatched = false;
-        gUsbPresentT0 = 0;
-        gUsbLatchV = 0.0f;
-        gUsbRiseV0 = 0.0f;
-        gTrendCharging = false;
-        gChgSessionT0 = 0;
-        gChgOnT0 = gChgOffT0 = 0;
-        gChgMaxV = 0.0f;
-        gChgZeroT0 = 0;
     }
 
     bool usbNowForTrend = usbPresentLatched;
