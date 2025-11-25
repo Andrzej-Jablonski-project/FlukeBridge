@@ -376,9 +376,9 @@ void updateBatteryFilter()
     const float usbRiseSlope = 0.35f; // mV/s to consider "rising" (aggressive)
     const float usbDropSlope = -0.05f;
     const uint32_t usbRiseHoldMs = 4000;
-    const uint32_t usbDropHoldMs = 4000;
+    const uint32_t usbDropHoldMs = 6000;
     const float usbRiseDelta = 0.05f; // +50 mV during rise window
-    const float usbDropDelta = 0.05f; // -50 mV from latch to allow unlatch
+    const float usbDropDelta = 0.08f; // -80 mV from latch to allow unlatch when not in CV
 
     if (!usbPresentLatched)
     {
@@ -406,17 +406,26 @@ void updateBatteryFilter()
     }
     else
     {
-        bool allowDrop = ((gUsbLatchV - gVbatFilt) >= usbDropDelta) || (gDvdtMVs <= usbDropSlope);
-        if (allowDrop)
+        // If we are clearly in CV (VBAT >= 4.05 V), keep USB latched unless a hard drop shows up.
+        bool inCvPlateau = (gVbatFilt >= 4.05f);
+        if (inCvPlateau)
         {
-            if (gUsbDropT0 == 0)
-                gUsbDropT0 = now;
-            if ((now - gUsbDropT0) >= usbDropHoldMs)
-                usbPresentLatched = false;
+            gUsbDropT0 = 0;
         }
         else
         {
-            gUsbDropT0 = 0;
+            bool allowDrop = ((gUsbLatchV - gVbatFilt) >= usbDropDelta) || (gDvdtMVs <= usbDropSlope) || (gVbatFilt < 3.90f);
+            if (allowDrop)
+            {
+                if (gUsbDropT0 == 0)
+                    gUsbDropT0 = now;
+                if ((now - gUsbDropT0) >= usbDropHoldMs)
+                    usbPresentLatched = false;
+            }
+            else
+            {
+                gUsbDropT0 = 0;
+            }
         }
 
         // Long flat near latch voltage → unlatch (no cable if brak netto zysku)
