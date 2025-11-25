@@ -164,6 +164,7 @@ uint32_t gUsbDropT0 = 0;    // timer for USB-present drop based on falling VBAT
 uint32_t gUsbRiseT0 = 0;    // timer for USB-present latch on rising VBAT
 uint32_t gUsbPresentT0 = 0; // timestamp when USB became present
 float gUsbLatchV = 0.0f;    // VBAT at USB latch time
+float gUsbRiseV0 = 0.0f;    // VBAT when soft-latch detection started
 uint32_t ledTmr = 0;
 bool ledOn = false;
 bool usbPresentLatched = false;
@@ -375,7 +376,7 @@ void updateBatteryFilter()
     bool usbPrev = usbPresentLatched;
     const float usbOnHard = USB_PRESENT_V + USB_PRESENT_HYST;  // ~4.02 V
     const float usbOffHard = USB_PRESENT_V - USB_PRESENT_HYST; // ~3.78 V
-    const float usbRiseSlope = 0.12f;                          // mV/s to consider "rising"
+    const float usbRiseSlope = 0.30f;                          // mV/s to consider "rising"
     const float usbDropSlope = -0.05f;                         // mV/s to consider "falling"
     const uint32_t usbRiseHoldMs = 5000;
     const uint32_t usbDropHoldMs = 10000;
@@ -393,18 +394,25 @@ void updateBatteryFilter()
         else if (gVbatFilt >= (USB_PRESENT_V - 0.02f) && gDvdtMVs >= usbRiseSlope)
         {
             if (gUsbRiseT0 == 0)
+            {
                 gUsbRiseT0 = now;
+                gUsbRiseV0 = gVbatFilt;
+            }
             if (now - gUsbRiseT0 >= usbRiseHoldMs)
             {
-                usbPresentLatched = true;
-                gUsbPresentT0 = now;
-                gUsbLatchV = gVbatFilt;
+                if ((gVbatFilt - gUsbRiseV0) >= 0.04f && gVbatFilt >= 3.95f)
+                {
+                    usbPresentLatched = true;
+                    gUsbPresentT0 = now;
+                    gUsbLatchV = gVbatFilt;
+                }
                 gUsbRiseT0 = 0;
             }
         }
         else
         {
             gUsbRiseT0 = 0;
+            gUsbRiseV0 = 0.0f;
         }
     }
     else
@@ -431,6 +439,7 @@ void updateBatteryFilter()
         {
             gUsbDropT0 = 0;
             gUsbRiseT0 = 0;
+            gUsbRiseV0 = 0.0f;
             gUsbPresentT0 = 0;
             gUsbLatchV = 0.0f;
             gTrendCharging = false;
@@ -450,6 +459,22 @@ void updateBatteryFilter()
     {
         gUsbPresentT0 = 0;
         gUsbLatchV = 0.0f;
+        gUsbRiseV0 = 0.0f;
+    }
+
+    // Safety: if USB is latched but VBAT stays <4.0 V and slope is near zero for long -> unlatch
+    if (usbPresentLatched && gUsbPresentT0 != 0 && (now - gUsbPresentT0) >= 60000 &&
+        gVbatFilt < 4.0f && fabsf(gDvdtMVs) < 0.02f)
+    {
+        usbPresentLatched = false;
+        gUsbPresentT0 = 0;
+        gUsbLatchV = 0.0f;
+        gUsbRiseV0 = 0.0f;
+        gTrendCharging = false;
+        gChgSessionT0 = 0;
+        gChgOnT0 = gChgOffT0 = 0;
+        gChgMaxV = 0.0f;
+        gChgZeroT0 = 0;
     }
 
     bool usbNowForTrend = usbPresentLatched;
