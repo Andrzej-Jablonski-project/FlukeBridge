@@ -377,10 +377,10 @@ void updateBatteryFilter()
     const float usbOnHard = USB_PRESENT_V + USB_PRESENT_HYST;  // ~4.02 V
     const float usbOffHard = USB_PRESENT_V - USB_PRESENT_HYST; // ~3.78 V
     const float usbRiseSlope = 0.30f;                          // mV/s to consider "rising"
-    const float usbDropSlope = -0.05f;                         // mV/s to consider "falling"
+    const float usbDropSlope = -0.02f;                         // mV/s to consider "falling"
     const uint32_t usbRiseHoldMs = 5000;
-    const uint32_t usbDropHoldMs = 10000;
-    const float usbDropDelta = 0.08f; // 80 mV drop from latch to allow unlatch near threshold
+    const uint32_t usbDropHoldMs = 5000;
+    const float usbDropDelta = 0.03f; // 30 mV drop from latch to allow unlatch near threshold
 
     if (!usbPresentLatched)
     {
@@ -419,11 +419,12 @@ void updateBatteryFilter()
     {
         bool offHard = (gVbatFilt <= usbOffHard);
         bool offDrop = (gVbatFilt <= (gUsbLatchV - usbDropDelta) && gDvdtMVs <= usbDropSlope);
+        bool offFast = (gDvdtMVs <= -0.25f); // rapid fall -> unplug
         if (offHard)
         {
             usbPresentLatched = false;
         }
-        else if (offDrop)
+        else if (offDrop || offFast)
         {
             if (gUsbDropT0 == 0)
                 gUsbDropT0 = now;
@@ -465,6 +466,21 @@ void updateBatteryFilter()
     // Safety: if USB is latched but VBAT stays <4.0 V and slope is near zero for long -> unlatch
     if (usbPresentLatched && gUsbPresentT0 != 0 && (now - gUsbPresentT0) >= 60000 &&
         gVbatFilt < 4.0f && fabsf(gDvdtMVs) < 0.02f)
+    {
+        usbPresentLatched = false;
+        gUsbPresentT0 = 0;
+        gUsbLatchV = 0.0f;
+        gUsbRiseV0 = 0.0f;
+        gTrendCharging = false;
+        gChgSessionT0 = 0;
+        gChgOnT0 = gChgOffT0 = 0;
+        gChgMaxV = 0.0f;
+        gChgZeroT0 = 0;
+    }
+
+    // Safety 2: if USB is latched but VBAT has fallen ≥60 mV from latch and slope is non-positive for 20 s -> unlatch
+    if (usbPresentLatched && gUsbPresentT0 != 0 && (now - gUsbPresentT0) >= 20000 &&
+        (gUsbLatchV - gVbatFilt) >= 0.06f && gDvdtMVs <= 0.0f)
     {
         usbPresentLatched = false;
         gUsbPresentT0 = 0;
