@@ -162,6 +162,8 @@ uint32_t gChgZeroT0 = 0;    // timer for near-zero slope OFF
 uint32_t gChgSessionT0 = 0; // when CHARGING latched during this session
 uint32_t gUsbDropT0 = 0;    // timer for USB-present drop based on falling VBAT
 uint32_t gUsbRiseT0 = 0;    // timer for USB-present latch on rising VBAT
+uint32_t gUsbPresentT0 = 0; // timestamp when USB became present
+float gUsbLatchV = 0.0f;    // VBAT at USB latch time
 uint32_t ledTmr = 0;
 bool ledOn = false;
 bool usbPresentLatched = false;
@@ -368,22 +370,35 @@ void updateBatteryFilter()
         gDvdtRefT = now;
         gDvdtRefV = gVbatFilt;
     }
-    // USB presence with hysteresis to avoid false positives on high VBAT after unplug
+    // USB presence with dual criteria: fast latch on high VBAT, slow latch on rising trend,
+    // and conservative drop requiring sustained fall or big delta.
+    bool usbPrev = usbPresentLatched;
+    const float usbOnHard = USB_PRESENT_V + USB_PRESENT_HYST;  // ~4.02 V
+    const float usbOffHard = USB_PRESENT_V - USB_PRESENT_HYST; // ~3.78 V
+    const float usbRiseSlope = 0.12f;                          // mV/s to consider "rising"
+    const float usbDropSlope = -0.05f;                         // mV/s to consider "falling"
+    const uint32_t usbRiseHoldMs = 5000;
+    const uint32_t usbDropHoldMs = 10000;
+    const float usbDropDelta = 0.08f; // 80 mV drop from latch to allow unlatch near threshold
+
     if (!usbPresentLatched)
     {
-        if (gVbatFilt > (USB_PRESENT_V + USB_PRESENT_HYST))
+        if (gVbatFilt >= usbOnHard)
         {
             usbPresentLatched = true;
             gUsbRiseT0 = 0;
+            gUsbPresentT0 = now;
+            gUsbLatchV = gVbatFilt;
         }
-        else if (gDvdtMVs >= 0.15f && gVbatFilt >= 3.70f)
+        else if (gVbatFilt >= (USB_PRESENT_V - 0.02f) && gDvdtMVs >= usbRiseSlope)
         {
-            // Rising VBAT with positive slope → likely cable just plugged in
             if (gUsbRiseT0 == 0)
                 gUsbRiseT0 = now;
-            if (now - gUsbRiseT0 >= 2500)
+            if (now - gUsbRiseT0 >= usbRiseHoldMs)
             {
                 usbPresentLatched = true;
+                gUsbPresentT0 = now;
+                gUsbLatchV = gVbatFilt;
                 gUsbRiseT0 = 0;
             }
         }
@@ -394,38 +409,49 @@ void updateBatteryFilter()
     }
     else
     {
-        if (gVbatFilt < (USB_PRESENT_V - USB_PRESENT_HYST))
+        bool offHard = (gVbatFilt <= usbOffHard);
+        bool offDrop = (gVbatFilt <= (gUsbLatchV - usbDropDelta) && gDvdtMVs <= usbDropSlope);
+        if (offHard)
         {
             usbPresentLatched = false;
+        }
+        else if (offDrop)
+        {
+            if (gUsbDropT0 == 0)
+                gUsbDropT0 = now;
+            if (now - gUsbDropT0 >= usbDropHoldMs)
+                usbPresentLatched = false;
+        }
+        else
+        {
+            gUsbDropT0 = 0;
+        }
+
+        if (!usbPresentLatched)
+        {
             gUsbDropT0 = 0;
             gUsbRiseT0 = 0;
+            gUsbPresentT0 = 0;
+            gUsbLatchV = 0.0f;
             gTrendCharging = false;
             gChgSessionT0 = 0;
             gChgOnT0 = gChgOffT0 = 0;
             gChgMaxV = 0.0f;
             gChgZeroT0 = 0;
         }
-        else if (gDvdtMVs <= -0.02f && gVbatFilt < (USB_PRESENT_V + 0.20f))
-        {
-            // Sustained small negative slope with VBAT near threshold -> likely unplugged
-            if (gUsbDropT0 == 0)
-                gUsbDropT0 = now;
-            if (now - gUsbDropT0 >= 8000)
-            {
-                usbPresentLatched = false;
-                gTrendCharging = false;
-                gChgSessionT0 = 0;
-                gChgOnT0 = gChgOffT0 = 0;
-                gChgMaxV = 0.0f;
-                gChgZeroT0 = 0;
-            }
-        }
-        else
-        {
-            gUsbDropT0 = 0;
-            gUsbRiseT0 = 0;
-        }
     }
+
+    if (!usbPrev && usbPresentLatched)
+    {
+        gUsbPresentT0 = now;
+        gUsbLatchV = gVbatFilt;
+    }
+    else if (usbPrev && !usbPresentLatched)
+    {
+        gUsbPresentT0 = 0;
+        gUsbLatchV = 0.0f;
+    }
+
     bool usbNowForTrend = usbPresentLatched;
     bool wasCharging = gTrendCharging;
     // FULL detection: use calibrated/normalized voltage near top and flat slope sustained
@@ -447,8 +473,19 @@ void updateBatteryFilter()
     }
     // CHARGING detection: positive slope sustained, and not full.
     // Only allow CHARGING when USB is present (VBAT above USB_PRESENT_V).
+    // If USB is present for a few seconds and VBAT gained >=10 mV (or slope clearly positive),
+    // latch CHARGING even without meeting the aggressive slope threshold to avoid false DISCHARGE.
     if (!gTrendFull && usbNowForTrend)
     {
+        // Auto-latch charging when USB has been present for a while and VBAT rose a bit
+        if (!gTrendCharging && gUsbPresentT0 != 0 && (now - gUsbPresentT0) >= 4000 &&
+            (gVbatFilt >= (gUsbLatchV + 0.01f) || gDvdtMVs >= 0.05f))
+        {
+            gTrendCharging = true;
+            gChgSessionT0 = now;
+            gChgFreezeUntil = now + gCfgChgFreezeMs;
+        }
+
         if (gDvdtMVs >= gCfgChgOnDvdt)
         {
             if (gChgOnT0 == 0)
