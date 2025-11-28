@@ -371,14 +371,13 @@ void updateBatteryFilter()
         gDvdtRefT = now;
         gDvdtRefV = gVbatFilt;
     }
-    // USB presence: latch only on sustained rise; unlatch on sustained fall/drop.
+    // USB presence: latch only on sustained rise; unlatch only on clear fall below 3.85 V.
     bool usbPrev = usbPresentLatched;
-    const float usbRiseSlope = 0.35f; // mV/s to consider "rising" (aggressive)
-    const float usbDropSlope = -0.05f;
-    const uint32_t usbRiseHoldMs = 4000;
-    const uint32_t usbDropHoldMs = 8000;
+    const float usbRiseSlope = 0.35f; // mV/s to consider "rising"
     const float usbRiseDelta = 0.05f; // +50 mV during rise window
-    const float usbDropDelta = 0.08f; // -80 mV from latch to allow unlatch when not in CV
+    const uint32_t usbRiseHoldMs = 4000;
+    const float usbDropSlope = -0.05f;
+    const uint32_t usbDropHoldMs = 8000;
 
     if (!usbPresentLatched)
     {
@@ -406,35 +405,17 @@ void updateBatteryFilter()
     }
     else
     {
-        // If we are clearly in CV (VBAT >= 4.05 V), keep USB latched unless a hard drop shows up.
-        bool inCvPlateau = (gVbatFilt >= 4.05f);
-        if (inCvPlateau)
+        bool allowDrop = (gVbatFilt < 3.85f && gDvdtMVs <= usbDropSlope);
+        if (allowDrop)
         {
-            gUsbDropT0 = 0;
+            if (gUsbDropT0 == 0)
+                gUsbDropT0 = now;
+            if ((now - gUsbDropT0) >= usbDropHoldMs)
+                usbPresentLatched = false;
         }
         else
         {
-            bool allowDrop = ((gUsbLatchV - gVbatFilt) >= usbDropDelta && gVbatFilt <= 3.95f) ||
-                             (gDvdtMVs <= usbDropSlope && gVbatFilt <= 3.90f) ||
-                             (gDvdtMVs <= -0.25f);
-            if (allowDrop)
-            {
-                if (gUsbDropT0 == 0)
-                    gUsbDropT0 = now;
-                if ((now - gUsbDropT0) >= usbDropHoldMs)
-                    usbPresentLatched = false;
-            }
-            else
-            {
-                gUsbDropT0 = 0;
-            }
-        }
-
-        // Long flat near latch voltage → unlatch (no cable if brak netto zysku)
-        if (usbPresentLatched && gUsbPresentT0 != 0 && (now - gUsbPresentT0) >= 60000 &&
-            (gUsbLatchV - gVbatFilt) >= 0.02f && fabsf(gDvdtMVs) < 0.02f)
-        {
-            usbPresentLatched = false;
+            gUsbDropT0 = 0;
         }
 
         if (!usbPresentLatched)
