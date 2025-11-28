@@ -376,7 +376,7 @@ void updateBatteryFilter()
     const float usbRiseSlope = 0.35f; // mV/s to consider "rising" (aggressive)
     const float usbDropSlope = -0.05f;
     const uint32_t usbRiseHoldMs = 4000;
-    const uint32_t usbDropHoldMs = 6000;
+    const uint32_t usbDropHoldMs = 8000;
     const float usbRiseDelta = 0.05f; // +50 mV during rise window
     const float usbDropDelta = 0.08f; // -80 mV from latch to allow unlatch when not in CV
 
@@ -414,7 +414,9 @@ void updateBatteryFilter()
         }
         else
         {
-            bool allowDrop = ((gUsbLatchV - gVbatFilt) >= usbDropDelta) || (gDvdtMVs <= usbDropSlope) || (gVbatFilt < 3.90f);
+            bool allowDrop = ((gUsbLatchV - gVbatFilt) >= usbDropDelta && gVbatFilt <= 3.95f) ||
+                             (gDvdtMVs <= usbDropSlope && gVbatFilt <= 3.90f) ||
+                             (gDvdtMVs <= -0.25f);
             if (allowDrop)
             {
                 if (gUsbDropT0 == 0)
