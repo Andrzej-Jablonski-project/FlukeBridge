@@ -376,7 +376,7 @@ void updateBatteryFilter()
     const float usbRiseSlope = 0.35f; // mV/s to consider "rising"
     const float usbRiseDelta = 0.05f; // +50 mV during rise window
     const uint32_t usbRiseHoldMs = 4000;
-    const float usbDropSlope = -0.05f;
+    const float usbDropSlope = -0.02f;
     const uint32_t usbDropHoldMs = 8000;
 
     if (!usbPresentLatched)
@@ -405,7 +405,9 @@ void updateBatteryFilter()
     }
     else
     {
-        bool allowDrop = (gVbatFilt < 3.85f && gDvdtMVs <= usbDropSlope);
+        // Drop USB only when VBAT clearly fell from latch or stayed low with negative slope.
+        bool allowDrop = ((gUsbLatchV - gVbatFilt) >= 0.12f) ||
+                         (gVbatFilt < 3.90f && gDvdtMVs <= usbDropSlope);
         if (allowDrop)
         {
             if (gUsbDropT0 == 0)
@@ -443,6 +445,20 @@ void updateBatteryFilter()
         gUsbPresentT0 = 0;
         gUsbLatchV = 0.0f;
         gUsbRiseV0 = 0.0f;
+    }
+    // Fallback: if USB latched but przez 90 s brak wzrostu (|dV/dt| < 0.02) i VBAT <= 4.0 V -> odłącz
+    if (usbPresentLatched && gUsbPresentT0 != 0 && (now - gUsbPresentT0) >= 90000 &&
+        gVbatFilt <= 4.0f && fabsf(gDvdtMVs) < 0.02f)
+    {
+        usbPresentLatched = false;
+        gUsbPresentT0 = 0;
+        gUsbLatchV = 0.0f;
+        gUsbRiseV0 = 0.0f;
+        gTrendCharging = false;
+        gChgSessionT0 = 0;
+        gChgOnT0 = gChgOffT0 = 0;
+        gChgMaxV = 0.0f;
+        gChgZeroT0 = 0;
     }
 
     bool usbNowForTrend = usbPresentLatched;
