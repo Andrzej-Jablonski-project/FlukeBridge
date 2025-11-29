@@ -377,7 +377,7 @@ void updateBatteryFilter()
     const float usbRiseDelta = 0.05f; // +50 mV during rise window
     const uint32_t usbRiseHoldMs = 4000;
     const float usbDropSlope = -0.02f;
-    const uint32_t usbDropHoldMs = 5000;
+    const uint32_t usbDropHoldMs = 3000;
 
     if (!usbPresentLatched)
     {
@@ -405,13 +405,13 @@ void updateBatteryFilter()
     }
     else
     {
-        // Drop USB only when VBAT clearly fell from latch or stayed low with negative slope.
+        // Drop USB when VBAT clearly fell after latch (no strong slope required).
         bool allowDrop = false;
         if (gVbatFilt < 3.80f)
             allowDrop = true;
-        else if ((gVbatFilt < 3.95f && gDvdtMVs <= usbDropSlope))
+        else if (gUsbLatchV > 0 && (gUsbLatchV - gVbatFilt) >= 0.08f)
             allowDrop = true;
-        else if ((gUsbLatchV - gVbatFilt) >= 0.10f && gDvdtMVs <= usbDropSlope)
+        else if (gVbatFilt < 3.95f && gDvdtMVs <= usbDropSlope)
             allowDrop = true;
         else if (gUsbPresentT0 != 0 && (now - gUsbPresentT0) >= 90000 &&
                  gVbatFilt <= 4.0f && fabsf(gDvdtMVs) < 0.02f)
