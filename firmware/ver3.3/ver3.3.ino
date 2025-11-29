@@ -431,13 +431,25 @@ void updateBatteryFilter()
         if (dropNow)
         {
             usbPresentLatched = false;
+            gTrendCharging = false;
+            gChgSessionT0 = 0;
+            gChgOnT0 = gChgOffT0 = 0;
+            gChgMaxV = 0.0f;
+            gChgZeroT0 = 0;
         }
         else if (allowDropTimer)
         {
             if (gUsbDropT0 == 0)
                 gUsbDropT0 = now;
             if ((now - gUsbDropT0) >= usbDropHoldMs)
+            {
                 usbPresentLatched = false;
+                gTrendCharging = false;
+                gChgSessionT0 = 0;
+                gChgOnT0 = gChgOffT0 = 0;
+                gChgMaxV = 0.0f;
+                gChgZeroT0 = 0;
+            }
         }
         else
         {
@@ -469,6 +481,11 @@ void updateBatteryFilter()
         gUsbPresentT0 = 0;
         gUsbLatchV = 0.0f;
         gUsbRiseV0 = 0.0f;
+        gTrendCharging = false;
+        gChgSessionT0 = 0;
+        gChgOnT0 = gChgOffT0 = 0;
+        gChgMaxV = 0.0f;
+        gChgZeroT0 = 0;
     }
     // Fallback: if USB latched but przez 90 s brak wzrostu (|dV/dt| < 0.02) i VBAT <= 4.0 V -> odłącz
     if (usbPresentLatched && gUsbPresentT0 != 0 && (now - gUsbPresentT0) >= 90000 &&
