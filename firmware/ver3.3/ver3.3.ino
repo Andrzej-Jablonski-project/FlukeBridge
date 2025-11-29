@@ -373,15 +373,24 @@ void updateBatteryFilter()
     }
     // USB presence: latch only on sustained rise; unlatch only on clear fall below 3.85 V.
     bool usbPrev = usbPresentLatched;
-    const float usbRiseSlope = 0.35f; // mV/s to consider "rising"
-    const float usbRiseDelta = 0.05f; // +50 mV during rise window
-    const uint32_t usbRiseHoldMs = 4000;
+    const float usbRiseSlope = 0.10f; // mV/s to consider "rising"
+    const float usbRiseDelta = 0.02f; // +20 mV during rise window
+    const uint32_t usbRiseHoldMs = 2000;
     const float usbDropSlope = -0.02f;
     const uint32_t usbDropHoldMs = 3000;
 
     if (!usbPresentLatched)
     {
-        if (gVbatFilt >= 3.85f && gDvdtMVs >= usbRiseSlope)
+        // Hard latch if VBAT is already high (typical when cable present)
+        if (gVbatFilt >= 4.05f)
+        {
+            usbPresentLatched = true;
+            gUsbPresentT0 = now;
+            gUsbLatchV = gVbatFilt;
+            gUsbRiseT0 = 0;
+            gUsbRiseV0 = 0.0f;
+        }
+        else if (gVbatFilt >= 3.85f && gDvdtMVs >= usbRiseSlope)
         {
             if (gUsbRiseT0 == 0)
             {
