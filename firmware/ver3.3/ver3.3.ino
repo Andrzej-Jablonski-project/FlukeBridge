@@ -415,18 +415,24 @@ void updateBatteryFilter()
     else
     {
         // Drop USB when VBAT clearly fell after latch (no strong slope required).
-        bool allowDrop = false;
-        if (gVbatFilt < 3.80f)
-            allowDrop = true;
-        else if (gUsbLatchV > 0 && (gUsbLatchV - gVbatFilt) >= 0.08f)
-            allowDrop = true;
-        else if (gVbatFilt < 3.95f && gDvdtMVs <= usbDropSlope)
-            allowDrop = true;
+        // Drop immediately on big fall, otherwise after short hold on low VBAT/negative slope
+        bool dropNow = false;
+        bool allowDropTimer = false;
+        if (gUsbLatchV > 0 && (gUsbLatchV - gVbatFilt) >= 0.08f)
+            dropNow = true;
+        else if (gVbatFilt < 3.80f)
+            dropNow = true;
+        else if (gVbatFilt < 3.90f && gDvdtMVs <= usbDropSlope)
+            allowDropTimer = true;
         else if (gUsbPresentT0 != 0 && (now - gUsbPresentT0) >= 90000 &&
                  gVbatFilt <= 4.0f && fabsf(gDvdtMVs) < 0.02f)
-            allowDrop = true;
+            allowDropTimer = true;
 
-        if (allowDrop)
+        if (dropNow)
+        {
+            usbPresentLatched = false;
+        }
+        else if (allowDropTimer)
         {
             if (gUsbDropT0 == 0)
                 gUsbDropT0 = now;
